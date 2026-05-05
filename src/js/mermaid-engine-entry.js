@@ -185,15 +185,35 @@ function estimateSvgExtents(element) {
       continue;
     }
     const offset = transformOffset(child);
-    const x = Number.parseFloat(child.getAttribute?.('x'));
-    const y = Number.parseFloat(child.getAttribute?.('y'));
-    const width = Number.parseFloat(child.getAttribute?.('width'));
-    const height = Number.parseFloat(child.getAttribute?.('height'));
+    // Container elements (<g>, <svg>) position their children via `transform`,
+    // NOT via `x`/`y` attributes. Using `x`/`y` on <g> in addition to the
+    // accumulated transform offset would double-count the position (e.g. sankey
+    // sets both `x=590` AND `transform="translate(590,...)"` on node groups).
+    const isContainer = tagName === 'g' || tagName === 'svg' || tagName === 'a'
+      || tagName === 'defs' || tagName === 'marker' || tagName === 'clippath'
+      || tagName === 'symbol' || tagName === 'pattern';
+    const x = isContainer ? NaN : Number.parseFloat(child.getAttribute?.('x'));
+    const y = isContainer ? NaN : Number.parseFloat(child.getAttribute?.('y'));
+    const width = isContainer ? NaN : Number.parseFloat(child.getAttribute?.('width'));
+    const height = isContainer ? NaN : Number.parseFloat(child.getAttribute?.('height'));
     if (Number.isFinite(x) || Number.isFinite(y) || Number.isFinite(width) || Number.isFinite(height)) {
-      const left = Number.isFinite(x) ? x + offset.x : offset.x;
-      const top = Number.isFinite(y) ? y + offset.y : offset.y;
+      const estW = Number.isFinite(width) ? width : (tagName === 'text' || tagName === 'tspan' ? estimateTextWidth(child) : 10);
+      const estH = Number.isFinite(height) ? height : 16;
+      // Respect text-anchor for text/tspan: "end" means text extends LEFT of x;
+      // "middle" means text is centered on x; "start" (default) extends RIGHT.
+      let left = Number.isFinite(x) ? x + offset.x : offset.x;
+      let top = Number.isFinite(y) ? y + offset.y : offset.y;
+      if (tagName === 'text' || tagName === 'tspan') {
+        const anchor = child.getAttribute?.('text-anchor')
+          || child.style?.textAnchor || 'start';
+        if (anchor === 'end') {
+          left -= estW;
+        } else if (anchor === 'middle') {
+          left -= estW / 2;
+        }
+      }
       includePoint(bounds, left, top);
-      includePoint(bounds, left + (Number.isFinite(width) ? width : estimateTextWidth(child)), top + (Number.isFinite(height) ? height : 16));
+      includePoint(bounds, left + estW, top + estH);
     }
     const x1 = Number.parseFloat(child.getAttribute?.('x1'));
     const y1 = Number.parseFloat(child.getAttribute?.('y1'));
@@ -316,19 +336,190 @@ function patchSvgMetrics(window, javaMetrics) {
     }
   }
 
+  // Parse a translate(tx, ty) transform from an element's transform attribute.
+  function parseTranslate(element) {
+    const tr = element?.getAttribute?.('transform') || '';
+    const m = /translate\(\s*([^,)\s]+)[\s,]*([^)]*)\)/.exec(tr);
+    return {
+      tx: m ? Number.parseFloat(m[1]) || 0 : 0,
+      ty: m ? Number.parseFloat(m[2]) || 0 : 0,
+    };
+  }
+
+  // Compute getBBox for a <g>/<a> container by unioning children's bboxes.
+  // Includes text, nested groups, and most geometric shapes. Excludes <rect>
+  // because Mermaid creates background/border rects AFTER calling getBBox
+  // to measure content — including them creates a feedback loop.
+  function groupBBox(element) {
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    const skip = new Set(['style', 'script', 'defs', 'marker', 'clippath', 'symbol', 'pattern', 'rect']);
+    for (const child of element.children || []) {
+      const ct = String(child.tagName || '').toLowerCase();
+      if (skip.has(ct)) continue;
+      const box = child.getBBox();
+      if (box.width === 0 && box.height === 0) continue;
+      const { tx, ty } = parseTranslate(child);
+      const l = box.x + tx;
+      const t = box.y + ty;
+      minX = Math.min(minX, l);
+      minY = Math.min(minY, t);
+      maxX = Math.max(maxX, l + box.width);
+      maxY = Math.max(maxY, t + box.height);
+    }
+    const valid = Number.isFinite(minX);
+    const x = valid ? minX : 0;
+    const y = valid ? minY : 0;
+    const w = valid ? maxX - minX : 0;
+    const h = valid ? maxY - minY : 0;
+    return { x, y, width: w, height: h, top: y, left: x, right: x + w, bottom: y + h, toJSON() { return this; } };
+  }
+
+  // Read a numeric attribute, returning 0 if missing/NaN.
+  function numAttr(el, name) {
+    return Number.parseFloat(el?.getAttribute?.(name)) || 0;
+  }
+
+  // Compute bbox for geometric SVG elements from their attributes.
+  function geometricBBox(element, tagName) {
+    switch (tagName) {
+      case 'rect':
+      case 'image':
+      case 'foreignobject':
+      case 'use': {
+        const x = numAttr(element, 'x');
+        const y = numAttr(element, 'y');
+        const w = numAttr(element, 'width');
+        const h = numAttr(element, 'height');
+        if (w > 0 || h > 0) return { x, y, width: w, height: h };
+        return null;
+      }
+      case 'circle': {
+        const cx = numAttr(element, 'cx');
+        const cy = numAttr(element, 'cy');
+        const r = numAttr(element, 'r');
+        if (r > 0) return { x: cx - r, y: cy - r, width: 2 * r, height: 2 * r };
+        return null;
+      }
+      case 'ellipse': {
+        const cx = numAttr(element, 'cx');
+        const cy = numAttr(element, 'cy');
+        const rx = numAttr(element, 'rx');
+        const ry = numAttr(element, 'ry');
+        if (rx > 0 || ry > 0) return { x: cx - rx, y: cy - ry, width: 2 * rx, height: 2 * ry };
+        return null;
+      }
+      case 'line': {
+        const x1 = numAttr(element, 'x1'), y1 = numAttr(element, 'y1');
+        const x2 = numAttr(element, 'x2'), y2 = numAttr(element, 'y2');
+        const lx = Math.min(x1, x2), ly = Math.min(y1, y2);
+        return { x: lx, y: ly, width: Math.abs(x2 - x1), height: Math.abs(y2 - y1) };
+      }
+      case 'path':
+      case 'polygon':
+      case 'polyline': {
+        // Parse coordinates from d (path) or points (polygon/polyline) attributes.
+        // Handles M, L, H, V, C, S, Q, T, A commands (absolute only — Mermaid
+        // uses absolute coords). Computes tight bounding box from all coordinate pairs.
+        const raw = tagName === 'path'
+          ? (element?.getAttribute?.('d') || '')
+          : (element?.getAttribute?.('points') || '');
+        if (!raw) return null;
+        let xs = [], ys = [];
+        if (tagName === 'path') {
+          // Extract all numeric coordinate pairs from path data.
+          // Strategy: split by commands, then collect numbers.
+          const nums = raw.replace(/[MLHVCSQTAZmlhvcsqtaz,]/g, ' ').trim().split(/\s+/).map(Number);
+          // Also parse commands to understand structure
+          const cmds = raw.match(/[MLHVCSQTAZmlhvcsqtaz][^MLHVCSQTAZmlhvcsqtaz]*/g) || [];
+          let cx = 0, cy = 0;
+          for (const cmd of cmds) {
+            const type = cmd[0];
+            const args = cmd.slice(1).trim().replace(/,/g, ' ').split(/\s+/).filter(s => s).map(Number);
+            switch (type) {
+              case 'M': case 'L': case 'T':
+                for (let i = 0; i + 1 < args.length; i += 2) {
+                  cx = args[i]; cy = args[i + 1];
+                  xs.push(cx); ys.push(cy);
+                }
+                break;
+              case 'H':
+                for (const v of args) { cx = v; xs.push(cx); ys.push(cy); }
+                break;
+              case 'V':
+                for (const v of args) { cy = v; ys.push(cy); xs.push(cx); }
+                break;
+              case 'C':
+                for (let i = 0; i + 5 < args.length; i += 6) {
+                  xs.push(args[i], args[i + 2], args[i + 4]);
+                  ys.push(args[i + 1], args[i + 3], args[i + 5]);
+                  cx = args[i + 4]; cy = args[i + 5];
+                }
+                break;
+              case 'S': case 'Q':
+                { const step = type === 'Q' ? 4 : 4;
+                  for (let i = 0; i + step - 1 < args.length; i += step) {
+                    for (let j = 0; j < step; j += 2) { xs.push(args[i + j]); ys.push(args[i + j + 1]); }
+                    cx = args[i + step - 2]; cy = args[i + step - 1];
+                  }
+                }
+                break;
+              case 'A':
+                for (let i = 0; i + 6 < args.length; i += 7) {
+                  cx = args[i + 5]; cy = args[i + 6];
+                  xs.push(cx); ys.push(cy);
+                }
+                break;
+              case 'Z': case 'z':
+                break;
+              // Relative commands — approximate by using current position
+              default:
+                break;
+            }
+          }
+        } else {
+          // polygon/polyline: "x1,y1 x2,y2 ..."
+          const pairs = raw.trim().split(/\s+/);
+          for (const p of pairs) {
+            const [x, y] = p.split(',').map(Number);
+            if (Number.isFinite(x)) xs.push(x);
+            if (Number.isFinite(y)) ys.push(y);
+          }
+        }
+        if (xs.length === 0) return null;
+        const minX = Math.min(...xs), minY = Math.min(...ys);
+        const maxX = Math.max(...xs), maxY = Math.max(...ys);
+        return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
+      }
+      default:
+        return null;
+    }
+  }
+
   SVGElement.prototype.getBBox = function getBBox() {
-    const { width, height } = realBox(this);
     const tagName = String(this?.tagName || '').toLowerCase();
+    // Container elements: recursively union children's bboxes (browser behavior).
+    if (tagName === 'g' || tagName === 'a') {
+      return groupBBox(this);
+    }
+
+    // Geometric elements: read dimensions from attributes.
+    const geo = geometricBBox(this, tagName);
+    if (geo) {
+      return { ...geo, top: geo.y, left: geo.x, right: geo.x + geo.width, bottom: geo.y + geo.height, toJSON() { return this; } };
+    }
+
+    // Text elements: use AWT text measurement.
+    const { width, height } = realBox(this);
     const y = tagName === 'text' || tagName === 'tspan' ? -height * 0.75 : 0;
     return {
       x: 0,
       y,
       width,
       height,
-      top: 0,
+      top: y,
       left: 0,
       right: width,
-      bottom: height,
+      bottom: y + height,
       toJSON() {
         return this;
       },
@@ -478,6 +669,107 @@ function installDom(javaMetrics) {
   return window;
 }
 
+/**
+ * Detects the Mermaid diagram type from the definition text.
+ * Returns a lowercase string key matching the diagram family.
+ */
+function detectDiagramType(text) {
+  const lines = text.trim().split('\n');
+  for (const line of lines) {
+    const t = line.trim().toLowerCase().replace(/\s+/g, ' ');
+    if (!t || t.startsWith('%%')) continue;
+    if (t.startsWith('flowchart') || t.startsWith('graph ') || t === 'graph') return 'flowchart';
+    if (t.startsWith('statediagram')) return 'state';
+    if (t.startsWith('classdiagram')) return 'class';
+    if (t.startsWith('sequencediagram')) return 'sequence';
+    if (t.startsWith('erdiagram')) return 'er';
+    if (t.startsWith('sankey')) return 'sankey';
+    if (t.startsWith('gantt')) return 'gantt';
+    if (t.startsWith('gitgraph')) return 'git';
+    if (t.startsWith('mindmap')) return 'mindmap';
+    if (t.startsWith('timeline')) return 'timeline';
+    if (t.startsWith('block-beta')) return 'block';
+    if (t.startsWith('architecture')) return 'architecture';
+    if (t.startsWith('c4context') || t.startsWith('c4container') || t.startsWith('c4component') || t.startsWith('c4dynamic') || t.startsWith('c4deployment')) return 'c4';
+    if (t.startsWith('kanban')) return 'kanban';
+    if (t.startsWith('packet-beta')) return 'packet';
+    if (t.startsWith('pie')) return 'pie';
+    if (t.startsWith('quadrant')) return 'quadrant';
+    if (t.startsWith('radar')) return 'radar';
+    if (t.startsWith('requirementdiagram')) return 'requirement';
+    if (t.startsWith('sankey-beta')) return 'sankey';
+    if (t.startsWith('treemap')) return 'treemap';
+    if (t.startsWith('journey')) return 'journey';
+    if (t.startsWith('xychart')) return 'xychart';
+    if (t.startsWith('zenuml')) return 'zenuml';
+    break;
+  }
+  return 'other';
+}
+
+/**
+ * Builds a per-diagram-type Mermaid config.
+ *
+ * Key insight: Mermaid's dagre layout reads ranksep as:
+ *   data4Layout.config?.rankSpacing
+ *   || data4Layout.config?.flowchart?.rankSpacing
+ *   || data4Layout.rankSpacing
+ *
+ * If flowchart.rankSpacing is set globally, it leaks into state/class/requirement
+ * diagrams because those only set data4Layout.rankSpacing (checked last).
+ * Fix: set flowchart.rankSpacing ONLY for flowchart renders; leave it undefined
+ * for other diagram types so data4Layout.rankSpacing (per-diagram default) wins.
+ */
+function buildMermaidConfig(diagramType) {
+  const base = {
+    startOnLoad: false,
+    securityLevel: 'loose',
+    deterministicIds: true,
+    deterministicIDSeed: 'dmtools',
+    theme: 'default',
+    htmlLabels: false,
+    // State diagram ranksep for state/class/requirement diagrams.
+    // These all read getConfig().state.rankSpacing.
+    // Browser uses ranksep=50 and achieves c2c≈85 (ranksep/2 each side + node).
+    // Our headless env produces c2c≈100 with ranksep=50 (no makeSpaceForEdgeLabels).
+    // Setting to 35 compensates for the deficit: c2c ≈ 35+50 = 85.
+    state: {
+      rankSpacing: 35,
+    },
+    class: {
+      htmlLabels: false,
+    },
+    er: {
+      htmlLabels: false,
+    },
+    // Sankey: disable useMaxWidth so it uses the configured 600×400 dimensions
+    // instead of the headless container width (~1190px).
+    sankey: {
+      useMaxWidth: false,
+    },
+  };
+
+  if (diagramType === 'flowchart') {
+    // With recursive groupBBox that includes path shapes, our node dimensions
+    // reported to dagre now match browser dimensions. The default rankSpacing=50
+    // (same as browser) should produce correct layout.
+    base.flowchart = {
+      htmlLabels: false,
+      rankSpacing: 50,
+      nodeSpacing: 50,
+    };
+  } else {
+    // Leave flowchart.rankSpacing undefined for non-flowchart diagrams so it
+    // does NOT leak into dagre's ranksep fallback chain for those diagram types.
+    base.flowchart = {
+      htmlLabels: false,
+      nodeSpacing: 50,
+    };
+  }
+
+  return base;
+}
+
 globalThis.renderMermaidToSvg = async function renderMermaidToSvg(definition, javaMetrics) {
   if (!definition || !definition.trim()) {
     throw new Error('Mermaid definition is required');
@@ -488,24 +780,8 @@ globalThis.renderMermaidToSvg = async function renderMermaidToSvg(definition, ja
   const { default: zenuml } = await import('@mermaid-js/mermaid-zenuml');
   const id = 'dmtools-mermaid';
 
-  mermaid.initialize({
-    startOnLoad: false,
-    securityLevel: 'loose',
-    deterministicIds: true,
-    deterministicIDSeed: 'dmtools',
-    theme: 'default',
-    look: 'classic',
-    htmlLabels: false,
-    flowchart: {
-      htmlLabels: false,
-    },
-    class: {
-      htmlLabels: false,
-    },
-    er: {
-      htmlLabels: false,
-    },
-  });
+  const diagramType = detectDiagramType(definition);
+  mermaid.initialize(buildMermaidConfig(diagramType));
   await mermaid.registerExternalDiagrams([zenuml]);
 
   try {

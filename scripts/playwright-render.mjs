@@ -299,6 +299,15 @@ async function renderWithPlaywright(outDir) {
       const container = await page.$('#container');
       if (container) {
         await container.screenshot({ path: outPath, omitBackground: false });
+        // Also save the SVG for analysis
+        const svgContent = await page.evaluate(() => {
+          const svgEl = document.querySelector('#diagram svg');
+          return svgEl ? svgEl.outerHTML : null;
+        });
+        if (svgContent) {
+          const { writeFileSync } = await import('fs');
+          writeFileSync(outPath.replace('.png', '.svg'), svgContent, 'utf8');
+        }
         console.log(`✓ ${fixture.name}`);
       } else {
         console.error(`✗ ${fixture.name}: container not found`);

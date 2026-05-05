@@ -1,4 +1,5 @@
 import { build } from 'esbuild';
+import { readFileSync, writeFileSync } from 'fs';
 
 const banner = `
 var atob = globalThis.atob || function(input) {
@@ -75,3 +76,19 @@ await build({
   outfile: 'src/main/resources/mermaid/mermaid-renderer.js',
   logLevel: 'warning',
 });
+
+// Post-build patch: fix dagre layout's ranksep/nodesep priority so that
+// per-diagram data4Layout.rankSpacing takes precedence over the global
+// flowchart.rankSpacing default, preventing config leakage across diagram types.
+// Without this, state/class/requirement diagrams inherit flowchart's rankSpacing=86.
+const bundlePath = 'src/main/resources/mermaid/mermaid-renderer.js';
+let bundle = readFileSync(bundlePath, 'utf8');
+const before = 'nodesep: data4Layout.config?.nodeSpacing || data4Layout.config?.flowchart?.nodeSpacing || data4Layout.nodeSpacing,\n          ranksep: data4Layout.config?.rankSpacing || data4Layout.config?.flowchart?.rankSpacing || data4Layout.rankSpacing,';
+const after  = 'nodesep: data4Layout.config?.nodeSpacing || data4Layout.nodeSpacing || data4Layout.config?.flowchart?.nodeSpacing,\n          ranksep: data4Layout.config?.rankSpacing || data4Layout.rankSpacing || data4Layout.config?.flowchart?.rankSpacing,';
+if (bundle.includes(before)) {
+  bundle = bundle.replace(before, after);
+  writeFileSync(bundlePath, bundle, 'utf8');
+  console.log('Applied dagre ranksep priority patch.');
+} else if (!bundle.includes(after)) {
+  console.warn('WARNING: dagre ranksep priority patch target not found – manual patch may be needed.');
+}

@@ -60127,8 +60127,8 @@ Please report this to https://github.com/markedjs/marked.`, e11) {
           compound: true
         }).setGraph({
           rankdir: data4Layout.direction,
-          nodesep: data4Layout.config?.nodeSpacing || data4Layout.config?.flowchart?.nodeSpacing || data4Layout.nodeSpacing,
-          ranksep: data4Layout.config?.rankSpacing || data4Layout.config?.flowchart?.rankSpacing || data4Layout.rankSpacing,
+          nodesep: data4Layout.config?.nodeSpacing || data4Layout.nodeSpacing || data4Layout.config?.flowchart?.nodeSpacing,
+          ranksep: data4Layout.config?.rankSpacing || data4Layout.rankSpacing || data4Layout.config?.flowchart?.rankSpacing,
           marginx: 8,
           marginy: 8
         }).setDefaultEdgeLabel(function() {
@@ -231709,15 +231709,26 @@ A.method() {
             continue;
           }
           const offset = transformOffset(child);
-          const x6 = Number.parseFloat(child.getAttribute?.("x"));
-          const y10 = Number.parseFloat(child.getAttribute?.("y"));
-          const width3 = Number.parseFloat(child.getAttribute?.("width"));
-          const height2 = Number.parseFloat(child.getAttribute?.("height"));
+          const isContainer = tagName19 === "g" || tagName19 === "svg" || tagName19 === "a" || tagName19 === "defs" || tagName19 === "marker" || tagName19 === "clippath" || tagName19 === "symbol" || tagName19 === "pattern";
+          const x6 = isContainer ? NaN : Number.parseFloat(child.getAttribute?.("x"));
+          const y10 = isContainer ? NaN : Number.parseFloat(child.getAttribute?.("y"));
+          const width3 = isContainer ? NaN : Number.parseFloat(child.getAttribute?.("width"));
+          const height2 = isContainer ? NaN : Number.parseFloat(child.getAttribute?.("height"));
           if (Number.isFinite(x6) || Number.isFinite(y10) || Number.isFinite(width3) || Number.isFinite(height2)) {
-            const left3 = Number.isFinite(x6) ? x6 + offset.x : offset.x;
-            const top2 = Number.isFinite(y10) ? y10 + offset.y : offset.y;
+            const estW = Number.isFinite(width3) ? width3 : tagName19 === "text" || tagName19 === "tspan" ? estimateTextWidth(child) : 10;
+            const estH = Number.isFinite(height2) ? height2 : 16;
+            let left3 = Number.isFinite(x6) ? x6 + offset.x : offset.x;
+            let top2 = Number.isFinite(y10) ? y10 + offset.y : offset.y;
+            if (tagName19 === "text" || tagName19 === "tspan") {
+              const anchor2 = child.getAttribute?.("text-anchor") || child.style?.textAnchor || "start";
+              if (anchor2 === "end") {
+                left3 -= estW;
+              } else if (anchor2 === "middle") {
+                left3 -= estW / 2;
+              }
+            }
             includePoint(bounds4, left3, top2);
-            includePoint(bounds4, left3 + (Number.isFinite(width3) ? width3 : estimateTextWidth(child)), top2 + (Number.isFinite(height2) ? height2 : 16));
+            includePoint(bounds4, left3 + estW, top2 + estH);
           }
           const x13 = Number.parseFloat(child.getAttribute?.("x1"));
           const y13 = Number.parseFloat(child.getAttribute?.("y1"));
@@ -231826,19 +231837,191 @@ A.method() {
             return estimateBox(element3);
           }
         }
+        function parseTranslate(element3) {
+          const tr = element3?.getAttribute?.("transform") || "";
+          const m10 = /translate\(\s*([^,)\s]+)[\s,]*([^)]*)\)/.exec(tr);
+          return {
+            tx: m10 ? Number.parseFloat(m10[1]) || 0 : 0,
+            ty: m10 ? Number.parseFloat(m10[2]) || 0 : 0
+          };
+        }
+        function groupBBox(element3) {
+          let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+          const skip = /* @__PURE__ */ new Set(["style", "script", "defs", "marker", "clippath", "symbol", "pattern", "rect"]);
+          for (const child of element3.children || []) {
+            const ct = String(child.tagName || "").toLowerCase();
+            if (skip.has(ct)) continue;
+            const box = child.getBBox();
+            if (box.width === 0 && box.height === 0) continue;
+            const { tx: tx2, ty } = parseTranslate(child);
+            const l10 = box.x + tx2;
+            const t10 = box.y + ty;
+            minX = Math.min(minX, l10);
+            minY = Math.min(minY, t10);
+            maxX = Math.max(maxX, l10 + box.width);
+            maxY = Math.max(maxY, t10 + box.height);
+          }
+          const valid2 = Number.isFinite(minX);
+          const x6 = valid2 ? minX : 0;
+          const y10 = valid2 ? minY : 0;
+          const w11 = valid2 ? maxX - minX : 0;
+          const h10 = valid2 ? maxY - minY : 0;
+          return { x: x6, y: y10, width: w11, height: h10, top: y10, left: x6, right: x6 + w11, bottom: y10 + h10, toJSON() {
+            return this;
+          } };
+        }
+        function numAttr(el, name) {
+          return Number.parseFloat(el?.getAttribute?.(name)) || 0;
+        }
+        function geometricBBox(element3, tagName19) {
+          switch (tagName19) {
+            case "rect":
+            case "image":
+            case "foreignobject":
+            case "use": {
+              const x6 = numAttr(element3, "x");
+              const y10 = numAttr(element3, "y");
+              const w11 = numAttr(element3, "width");
+              const h10 = numAttr(element3, "height");
+              if (w11 > 0 || h10 > 0) return { x: x6, y: y10, width: w11, height: h10 };
+              return null;
+            }
+            case "circle": {
+              const cx2 = numAttr(element3, "cx");
+              const cy = numAttr(element3, "cy");
+              const r10 = numAttr(element3, "r");
+              if (r10 > 0) return { x: cx2 - r10, y: cy - r10, width: 2 * r10, height: 2 * r10 };
+              return null;
+            }
+            case "ellipse": {
+              const cx2 = numAttr(element3, "cx");
+              const cy = numAttr(element3, "cy");
+              const rx2 = numAttr(element3, "rx");
+              const ry = numAttr(element3, "ry");
+              if (rx2 > 0 || ry > 0) return { x: cx2 - rx2, y: cy - ry, width: 2 * rx2, height: 2 * ry };
+              return null;
+            }
+            case "line": {
+              const x13 = numAttr(element3, "x1"), y13 = numAttr(element3, "y1");
+              const x24 = numAttr(element3, "x2"), y24 = numAttr(element3, "y2");
+              const lx2 = Math.min(x13, x24), ly = Math.min(y13, y24);
+              return { x: lx2, y: ly, width: Math.abs(x24 - x13), height: Math.abs(y24 - y13) };
+            }
+            case "path":
+            case "polygon":
+            case "polyline": {
+              const raw = tagName19 === "path" ? element3?.getAttribute?.("d") || "" : element3?.getAttribute?.("points") || "";
+              if (!raw) return null;
+              let xs = [], ys = [];
+              if (tagName19 === "path") {
+                const nums = raw.replace(/[MLHVCSQTAZmlhvcsqtaz,]/g, " ").trim().split(/\s+/).map(Number);
+                const cmds = raw.match(/[MLHVCSQTAZmlhvcsqtaz][^MLHVCSQTAZmlhvcsqtaz]*/g) || [];
+                let cx2 = 0, cy = 0;
+                for (const cmd of cmds) {
+                  const type3 = cmd[0];
+                  const args = cmd.slice(1).trim().replace(/,/g, " ").split(/\s+/).filter((s10) => s10).map(Number);
+                  switch (type3) {
+                    case "M":
+                    case "L":
+                    case "T":
+                      for (let i10 = 0; i10 + 1 < args.length; i10 += 2) {
+                        cx2 = args[i10];
+                        cy = args[i10 + 1];
+                        xs.push(cx2);
+                        ys.push(cy);
+                      }
+                      break;
+                    case "H":
+                      for (const v10 of args) {
+                        cx2 = v10;
+                        xs.push(cx2);
+                        ys.push(cy);
+                      }
+                      break;
+                    case "V":
+                      for (const v10 of args) {
+                        cy = v10;
+                        ys.push(cy);
+                        xs.push(cx2);
+                      }
+                      break;
+                    case "C":
+                      for (let i10 = 0; i10 + 5 < args.length; i10 += 6) {
+                        xs.push(args[i10], args[i10 + 2], args[i10 + 4]);
+                        ys.push(args[i10 + 1], args[i10 + 3], args[i10 + 5]);
+                        cx2 = args[i10 + 4];
+                        cy = args[i10 + 5];
+                      }
+                      break;
+                    case "S":
+                    case "Q":
+                      {
+                        const step3 = type3 === "Q" ? 4 : 4;
+                        for (let i10 = 0; i10 + step3 - 1 < args.length; i10 += step3) {
+                          for (let j6 = 0; j6 < step3; j6 += 2) {
+                            xs.push(args[i10 + j6]);
+                            ys.push(args[i10 + j6 + 1]);
+                          }
+                          cx2 = args[i10 + step3 - 2];
+                          cy = args[i10 + step3 - 1];
+                        }
+                      }
+                      break;
+                    case "A":
+                      for (let i10 = 0; i10 + 6 < args.length; i10 += 7) {
+                        cx2 = args[i10 + 5];
+                        cy = args[i10 + 6];
+                        xs.push(cx2);
+                        ys.push(cy);
+                      }
+                      break;
+                    case "Z":
+                    case "z":
+                      break;
+                    // Relative commands — approximate by using current position
+                    default:
+                      break;
+                  }
+                }
+              } else {
+                const pairs2 = raw.trim().split(/\s+/);
+                for (const p6 of pairs2) {
+                  const [x6, y10] = p6.split(",").map(Number);
+                  if (Number.isFinite(x6)) xs.push(x6);
+                  if (Number.isFinite(y10)) ys.push(y10);
+                }
+              }
+              if (xs.length === 0) return null;
+              const minX = Math.min(...xs), minY = Math.min(...ys);
+              const maxX = Math.max(...xs), maxY = Math.max(...ys);
+              return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
+            }
+            default:
+              return null;
+          }
+        }
         SVGElement3.prototype.getBBox = function getBBox() {
-          const { width: width3, height: height2 } = realBox(this);
           const tagName19 = String(this?.tagName || "").toLowerCase();
+          if (tagName19 === "g" || tagName19 === "a") {
+            return groupBBox(this);
+          }
+          const geo = geometricBBox(this, tagName19);
+          if (geo) {
+            return { ...geo, top: geo.y, left: geo.x, right: geo.x + geo.width, bottom: geo.y + geo.height, toJSON() {
+              return this;
+            } };
+          }
+          const { width: width3, height: height2 } = realBox(this);
           const y10 = tagName19 === "text" || tagName19 === "tspan" ? -height2 * 0.75 : 0;
           return {
             x: 0,
             y: y10,
             width: width3,
             height: height2,
-            top: 0,
+            top: y10,
             left: 0,
             right: width3,
-            bottom: height2,
+            bottom: y10 + height2,
             toJSON() {
               return this;
             }
@@ -232000,6 +232183,81 @@ A.method() {
         };
         return window3;
       }
+      function detectDiagramType(text4) {
+        const lines = text4.trim().split("\n");
+        for (const line2 of lines) {
+          const t10 = line2.trim().toLowerCase().replace(/\s+/g, " ");
+          if (!t10 || t10.startsWith("%%")) continue;
+          if (t10.startsWith("flowchart") || t10.startsWith("graph ") || t10 === "graph") return "flowchart";
+          if (t10.startsWith("statediagram")) return "state";
+          if (t10.startsWith("classdiagram")) return "class";
+          if (t10.startsWith("sequencediagram")) return "sequence";
+          if (t10.startsWith("erdiagram")) return "er";
+          if (t10.startsWith("sankey")) return "sankey";
+          if (t10.startsWith("gantt")) return "gantt";
+          if (t10.startsWith("gitgraph")) return "git";
+          if (t10.startsWith("mindmap")) return "mindmap";
+          if (t10.startsWith("timeline")) return "timeline";
+          if (t10.startsWith("block-beta")) return "block";
+          if (t10.startsWith("architecture")) return "architecture";
+          if (t10.startsWith("c4context") || t10.startsWith("c4container") || t10.startsWith("c4component") || t10.startsWith("c4dynamic") || t10.startsWith("c4deployment")) return "c4";
+          if (t10.startsWith("kanban")) return "kanban";
+          if (t10.startsWith("packet-beta")) return "packet";
+          if (t10.startsWith("pie")) return "pie";
+          if (t10.startsWith("quadrant")) return "quadrant";
+          if (t10.startsWith("radar")) return "radar";
+          if (t10.startsWith("requirementdiagram")) return "requirement";
+          if (t10.startsWith("sankey-beta")) return "sankey";
+          if (t10.startsWith("treemap")) return "treemap";
+          if (t10.startsWith("journey")) return "journey";
+          if (t10.startsWith("xychart")) return "xychart";
+          if (t10.startsWith("zenuml")) return "zenuml";
+          break;
+        }
+        return "other";
+      }
+      function buildMermaidConfig(diagramType) {
+        const base = {
+          startOnLoad: false,
+          securityLevel: "loose",
+          deterministicIds: true,
+          deterministicIDSeed: "dmtools",
+          theme: "default",
+          htmlLabels: false,
+          // State diagram ranksep for state/class/requirement diagrams.
+          // These all read getConfig().state.rankSpacing.
+          // Browser uses ranksep=50 and achieves c2c≈85 (ranksep/2 each side + node).
+          // Our headless env produces c2c≈100 with ranksep=50 (no makeSpaceForEdgeLabels).
+          // Setting to 35 compensates for the deficit: c2c ≈ 35+50 = 85.
+          state: {
+            rankSpacing: 35
+          },
+          class: {
+            htmlLabels: false
+          },
+          er: {
+            htmlLabels: false
+          },
+          // Sankey: disable useMaxWidth so it uses the configured 600×400 dimensions
+          // instead of the headless container width (~1190px).
+          sankey: {
+            useMaxWidth: false
+          }
+        };
+        if (diagramType === "flowchart") {
+          base.flowchart = {
+            htmlLabels: false,
+            rankSpacing: 50,
+            nodeSpacing: 50
+          };
+        } else {
+          base.flowchart = {
+            htmlLabels: false,
+            nodeSpacing: 50
+          };
+        }
+        return base;
+      }
       globalThis.renderMermaidToSvg = async function renderMermaidToSvg(definition, javaMetrics) {
         if (!definition || !definition.trim()) {
           throw new Error("Mermaid definition is required");
@@ -232008,24 +232266,8 @@ A.method() {
         const { default: mermaid2 } = await Promise.resolve().then(() => (init_mermaid_esm(), mermaid_esm_exports));
         const { default: zenuml } = await Promise.resolve().then(() => (init_mermaid_zenuml_core(), mermaid_zenuml_core_exports));
         const id34 = "dmtools-mermaid";
-        mermaid2.initialize({
-          startOnLoad: false,
-          securityLevel: "loose",
-          deterministicIds: true,
-          deterministicIDSeed: "dmtools",
-          theme: "default",
-          look: "classic",
-          htmlLabels: false,
-          flowchart: {
-            htmlLabels: false
-          },
-          class: {
-            htmlLabels: false
-          },
-          er: {
-            htmlLabels: false
-          }
-        });
+        const diagramType = detectDiagramType(definition);
+        mermaid2.initialize(buildMermaidConfig(diagramType));
         await mermaid2.registerExternalDiagrams([zenuml]);
         try {
           const result = await mermaid2.render(id34, definition);
