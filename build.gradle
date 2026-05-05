@@ -1,0 +1,48 @@
+plugins {
+    id 'java-library'
+    id 'maven-publish'
+}
+
+group = 'com.github.istin'
+version = '0.1.0-SNAPSHOT'
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_17
+    targetCompatibility = JavaVersion.VERSION_17
+    withSourcesJar()
+}
+
+def versions = [
+        graalvm: '24.1.1',
+        batik  : '1.18',
+        junit  : '5.11.4'
+]
+
+dependencies {
+    api "org.graalvm.polyglot:polyglot:${versions.graalvm}"
+    api "org.graalvm.js:js-community:${versions.graalvm}"
+    api "org.apache.xmlgraphics:batik-transcoder:${versions.batik}"
+    api "org.apache.xmlgraphics:batik-codec:${versions.batik}"
+
+    testImplementation platform("org.junit:junit-bom:${versions.junit}")
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+}
+
+test {
+    useJUnitPlatform()
+}
+
+tasks.register('runRenderer', JavaExec) {
+    group = 'application'
+    description = 'Runs the Mermaid renderer CLI.'
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'com.github.istin.dmtools.mermaid.MermaidRendererCli'
+}
+
+publishing {
+    publications {
+        mavenJava(MavenPublication) {
+            from components.java
+        }
+    }
+}
