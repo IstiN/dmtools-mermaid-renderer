@@ -232012,15 +232012,39 @@ A.method() {
             } };
           }
           const { width: width3, height: height2 } = realBox(this);
-          const y10 = tagName19 === "text" || tagName19 === "tspan" ? -height2 * 0.75 : 0;
+          let x6 = 0;
+          let y10 = 0;
+          if (tagName19 === "text" || tagName19 === "tspan") {
+            const anchor2 = this.getAttribute?.("text-anchor") || this.closest?.("text")?.getAttribute?.("text-anchor") || "start";
+            if (anchor2 === "middle") x6 = -width3 / 2;
+            else if (anchor2 === "end") x6 = -width3;
+            const fontSize = 16;
+            const ascent = height2 * 0.75;
+            let baseline = 0;
+            const firstTspan = this.querySelector?.("tspan");
+            if (firstTspan) {
+              const tspanY = firstTspan.getAttribute?.("y") || "";
+              const tspanDy = firstTspan.getAttribute?.("dy") || "";
+              const parseVal = (v10) => {
+                if (!v10) return 0;
+                const emMatch = /^(-?[\d.]+)em$/.exec(v10);
+                if (emMatch) return Number.parseFloat(emMatch[1]) * fontSize;
+                return Number.parseFloat(v10) || 0;
+              };
+              baseline = parseVal(tspanY) + parseVal(tspanDy);
+            } else {
+              baseline = Number.parseFloat(this.getAttribute?.("y")) || 0;
+            }
+            y10 = baseline - ascent;
+          }
           return {
-            x: 0,
+            x: x6,
             y: y10,
             width: width3,
             height: height2,
             top: y10,
-            left: 0,
-            right: width3,
+            left: x6,
+            right: x6 + width3,
             bottom: y10 + height2,
             toJSON() {
               return this;

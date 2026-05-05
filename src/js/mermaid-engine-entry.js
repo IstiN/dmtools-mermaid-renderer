@@ -508,17 +508,57 @@ function patchSvgMetrics(window, javaMetrics) {
       return { ...geo, top: geo.y, left: geo.x, right: geo.x + geo.width, bottom: geo.y + geo.height, toJSON() { return this; } };
     }
 
-    // Text elements: use AWT text measurement.
+    // Text elements: use AWT text measurement with proper positioning.
     const { width, height } = realBox(this);
-    const y = tagName === 'text' || tagName === 'tspan' ? -height * 0.75 : 0;
+    let x = 0;
+    let y = 0;
+
+    if (tagName === 'text' || tagName === 'tspan') {
+      // Account for text-anchor: middle/end shift the bbox left.
+      // In SVG, text-anchor defines where the text's x-position anchors:
+      //   start: x is left edge (default)
+      //   middle: x is center → bbox.x = -width/2
+      //   end: x is right edge → bbox.x = -width
+      const anchor = this.getAttribute?.('text-anchor')
+        || this.closest?.('text')?.getAttribute?.('text-anchor')
+        || 'start';
+      if (anchor === 'middle') x = -width / 2;
+      else if (anchor === 'end') x = -width;
+
+      // Compute y from tspan y/dy attributes to match browser baseline positioning.
+      // Browser getBBox.y = rendered_baseline - ascent.
+      // Mermaid edge labels use: <text y="-10.1"><tspan y="-0.1em" dy="1.1em">label</tspan></text>
+      // The tspan y overrides text y, then dy shifts from there.
+      const fontSize = 16; // Mermaid default
+      const ascent = height * 0.75;
+      let baseline = 0;
+      const firstTspan = this.querySelector?.('tspan');
+      if (firstTspan) {
+        const tspanY = firstTspan.getAttribute?.('y') || '';
+        const tspanDy = firstTspan.getAttribute?.('dy') || '';
+        // Parse em-based or px values
+        const parseVal = (v) => {
+          if (!v) return 0;
+          const emMatch = /^(-?[\d.]+)em$/.exec(v);
+          if (emMatch) return Number.parseFloat(emMatch[1]) * fontSize;
+          return Number.parseFloat(v) || 0;
+        };
+        // tspan y overrides parent text y, dy adds offset
+        baseline = parseVal(tspanY) + parseVal(tspanDy);
+      } else {
+        // No tspan — use text's own y attribute
+        baseline = Number.parseFloat(this.getAttribute?.('y')) || 0;
+      }
+      y = baseline - ascent;
+    }
     return {
-      x: 0,
+      x,
       y,
       width,
       height,
       top: y,
-      left: 0,
-      right: width,
+      left: x,
+      right: x + width,
       bottom: y + height,
       toJSON() {
         return this;
