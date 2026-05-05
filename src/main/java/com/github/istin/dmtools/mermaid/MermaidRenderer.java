@@ -149,8 +149,11 @@ public class MermaidRenderer {
         return svg
                 .replaceFirst("<svg\\b(?![^>]*xmlns:xlink=)", "<svg xmlns:xlink=\"http://www.w3.org/1999/xlink\"")
                 .replaceAll("(?s)<filter\\b[^>]*>.*?</filter>", "")
+                .replaceAll("(?s)@keyframes\\s+[^\\{]+\\{.*?\\}\\s*\\}", "")
+                .replaceAll("animation:[^;\"}]+;?", "")
                 .replaceAll("\\sfilter=\"url\\(#[^)]+\\)\"", "")
                 .replace("orient=\"auto-start-reverse\"", "orient=\"auto\"")
+                .replace("alignment-baseline=\"central\"", "alignment-baseline=\"middle\"")
                 .replaceAll("<rect([^>]*?)(?<!/) />", "<rect$1></rect>")
                 .replaceAll("<rect((?:(?!\\bwidth=)[^>])*)>", "<rect width=\"1\"$1>")
                 .replaceAll("<rect((?:(?!\\bheight=)[^>])*)>", "<rect height=\"1\"$1>")
