@@ -42,28 +42,15 @@ class MermaidRendererTest {
                         "Request status"
                 ),
                 new DiagramFixture(
-                        "class",
+                        "mindmap",
                         """
-                        classDiagram
-                        class JobRunner
-                        JobRunner : +main(String[] args)
-                        class MermaidRenderer
-                        MermaidRenderer : +renderToSvg(String definition)
-                        JobRunner --> MermaidRenderer : delegates
+                        mindmap
+                          root((DMTools))
+                            Renderer
+                              SVG
+                              PNG
                         """,
-                        "MermaidRenderer"
-                ),
-                new DiagramFixture(
-                        "state",
-                        """
-                        stateDiagram-v2
-                        [*] --> Blocked
-                        Blocked --> Backlog : blockers done
-                        Backlog --> InProgress : sprint starts
-                        InProgress --> Done : accepted
-                        Done --> [*]
-                        """,
-                        "Blocked"
+                        "DMTools"
                 )
         );
     }
@@ -125,8 +112,23 @@ class MermaidRendererTest {
                 () -> new MermaidRenderer().renderToSvg("notAMermaidDiagram")
         );
 
-        assertTrue(exception.getMessage().contains("No diagram type detected")
+        assertTrue(exception.getMessage().contains("UNSUPPORTED")
+                || exception.getMessage().contains("EXPERIMENTAL")
+                || exception.getMessage().contains("No diagram type detected")
                 || exception.getMessage().contains("Unsupported Mermaid diagram type"));
+    }
+
+    @Test
+    void rejectsExperimentalDiagramTypesFromProductionApi() {
+        IllegalArgumentException exception = assertThrows(
+                IllegalArgumentException.class,
+                () -> new MermaidRenderer().renderToSvg("""
+                        classDiagram
+                          class MermaidRenderer
+                        """)
+        );
+
+        assertTrue(exception.getMessage().contains("EXPERIMENTAL"));
     }
 
     private void assertPng(Path outputPath) throws Exception {

@@ -231520,18 +231520,28 @@ A.method() {
   var require_mermaid_engine_entry = __commonJS({
     "src/js/mermaid-engine-entry.js"() {
       init_esm10();
+      function visibleText(element3) {
+        const tagName19 = String(element3?.tagName || "").toLowerCase();
+        if (tagName19 === "style" || tagName19 === "script") {
+          return "";
+        }
+        if (["text", "span", "p", "div"].includes(tagName19)) {
+          return element3?.textContent || "";
+        }
+        if (tagName19 === "tspan") {
+          const children2 = Array.from(element3?.children || []);
+          return children2.length ? children2.map(visibleText).join(" ") : element3?.textContent || "";
+        }
+        return Array.from(element3?.children || []).map(visibleText).filter(Boolean).join(" ");
+      }
       function estimateTextWidth(element3) {
         const tagName19 = String(element3?.tagName || "").toLowerCase();
         if (tagName19 === "style" || tagName19 === "script") {
           return 0;
         }
-        let text4 = "";
-        if (["text", "tspan", "span", "p", "div"].includes(tagName19)) {
-          text4 = element3?.textContent || "";
-        } else {
-          text4 = Array.from(element3?.querySelectorAll?.("text,tspan,span,p") || []).map((child) => child.textContent || "").join(" ");
-        }
-        return Math.max(10, text4.length * 8);
+        const text4 = visibleText(element3);
+        const fontSize = parseFontSize2(element3);
+        return Math.max(10, text4.length * fontSize * 0.58);
       }
       function estimateBox(element3) {
         const tagName19 = String(element3?.tagName || "").toLowerCase();
@@ -231554,13 +231564,47 @@ A.method() {
         if (tagName19 === "style" || tagName19 === "script") {
           return { width: 0, height: 0 };
         }
-        const textNodes2 = element3?.querySelectorAll?.("text,tspan,span,p") || [];
-        const text4 = ["text", "tspan", "span", "p", "div"].includes(tagName19) ? element3?.textContent || "" : Array.from(textNodes2).map((child) => child.textContent || "").join(" ");
-        const lines = Math.max(1, text4.split(/\n/).length);
+        const text4 = visibleText(element3);
+        const lines = estimateLineCount(element3, text4);
+        const fontSize = parseFontSize2(element3);
         return {
-          width: Math.max(10, text4.length * 8),
-          height: lines * 16
+          width: Math.max(10, text4.length * fontSize * 0.58),
+          height: Math.max(fontSize * 1.45, lines * fontSize * 1.45)
         };
+      }
+      function parseFontSize2(element3) {
+        const styleSize = element3?.style?.fontSize;
+        const attrStyle = element3?.getAttribute?.("style") || "";
+        const attrMatch = /font-size\s*:\s*(\d+(?:\.\d+)?)px/.exec(attrStyle);
+        const raw = styleSize || (attrMatch ? `${attrMatch[1]}px` : "");
+        const parsed = Number.parseFloat(raw);
+        return Number.isFinite(parsed) && parsed > 0 ? parsed : 16;
+      }
+      function parseFontFamily(element3) {
+        const attrStyle = element3?.getAttribute?.("style") || "";
+        const match2 = /font-family\s*:\s*([^;]+)/.exec(attrStyle);
+        if (match2) return match2[1].trim();
+        const fontAttr = element3?.getAttribute?.("font-family");
+        if (fontAttr) return fontAttr;
+        return "sans-serif";
+      }
+      function estimateLineCount(element3, text4) {
+        const tagName19 = String(element3?.tagName || "").toLowerCase();
+        if (tagName19 === "text") {
+          const rowCount = element3.querySelectorAll?.("tspan.row").length || 0;
+          if (rowCount > 0) {
+            return rowCount;
+          }
+          const directTspans = element3.querySelectorAll?.(":scope > tspan").length || 0;
+          if (directTspans > 1) {
+            return directTspans;
+          }
+        }
+        const paragraphs = element3?.querySelectorAll?.("p")?.length || 0;
+        if (paragraphs > 0) {
+          return paragraphs;
+        }
+        return Math.max(1, String(text4 || "").split(/\n/).length);
       }
       function transformOffset(element3) {
         let x6 = 0;
@@ -231586,11 +231630,82 @@ A.method() {
         bounds4.maxX = Math.max(bounds4.maxX, x6);
         bounds4.maxY = Math.max(bounds4.maxY, y10);
       }
+      var SKIP_IN_EXTENTS = /* @__PURE__ */ new Set(["style", "script", "defs", "marker", "clippath", "pattern", "mask", "symbol", "lineargradient", "radialgradient", "filter", "fegaussianblur", "feblend", "fecomposite"]);
+      function isInsideDefLike(element3) {
+        let p6 = element3.parentElement;
+        while (p6) {
+          const t10 = String(p6.tagName || "").toLowerCase();
+          if (SKIP_IN_EXTENTS.has(t10)) return true;
+          p6 = p6.parentElement;
+        }
+        return false;
+      }
+      function parseSvgPathPoints(d10) {
+        const points = [];
+        const tokens2 = d10.match(/[MLCSQTAHVZmlcsqtahvz]|[-+]?[0-9]*\.?[0-9]+(?:[eE][-+]?[0-9]+)?/g) || [];
+        let cmd = "M";
+        let i10 = 0;
+        while (i10 < tokens2.length) {
+          const t10 = tokens2[i10];
+          if (/^[MLCSQTAHVZmlcsqtahvz]$/.test(t10)) {
+            cmd = t10;
+            i10++;
+            continue;
+          }
+          const num = (j6) => Number(tokens2[i10 + j6] || 0);
+          switch (cmd) {
+            case "M":
+            case "L":
+            case "T":
+              if (i10 + 1 < tokens2.length) {
+                points.push([num(0), num(1)]);
+                i10 += 2;
+              } else {
+                i10++;
+              }
+              break;
+            case "C":
+              if (i10 + 5 < tokens2.length) {
+                points.push([num(4), num(5)]);
+                i10 += 6;
+              } else {
+                i10++;
+              }
+              break;
+            case "Q":
+            case "S":
+              if (i10 + 3 < tokens2.length) {
+                points.push([num(2), num(3)]);
+                i10 += 4;
+              } else {
+                i10++;
+              }
+              break;
+            case "A":
+              if (i10 + 6 < tokens2.length) {
+                points.push([num(5), num(6)]);
+                i10 += 7;
+              } else {
+                i10++;
+              }
+              break;
+            case "H":
+              i10 += 1;
+              break;
+            case "V":
+              i10 += 1;
+              break;
+            default:
+              i10++;
+          }
+        }
+        return points;
+      }
       function estimateSvgExtents(element3) {
         const bounds4 = { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity };
         for (const child of element3.querySelectorAll?.("*") || []) {
           const tagName19 = String(child.tagName || "").toLowerCase();
-          if (tagName19 === "style" || tagName19 === "script" || tagName19 === "defs" || tagName19 === "marker") {
+          if (SKIP_IN_EXTENTS.has(tagName19) || isInsideDefLike(child)) {
             continue;
           }
           const offset = transformOffset(child);
@@ -231604,6 +231719,12 @@ A.method() {
             includePoint(bounds4, left3, top2);
             includePoint(bounds4, left3 + (Number.isFinite(width3) ? width3 : estimateTextWidth(child)), top2 + (Number.isFinite(height2) ? height2 : 16));
           }
+          const x13 = Number.parseFloat(child.getAttribute?.("x1"));
+          const y13 = Number.parseFloat(child.getAttribute?.("y1"));
+          const x24 = Number.parseFloat(child.getAttribute?.("x2"));
+          const y24 = Number.parseFloat(child.getAttribute?.("y2"));
+          if (Number.isFinite(x13) && Number.isFinite(y13)) includePoint(bounds4, x13 + offset.x, y13 + offset.y);
+          if (Number.isFinite(x24) && Number.isFinite(y24)) includePoint(bounds4, x24 + offset.x, y24 + offset.y);
           const points = child.getAttribute?.("points");
           if (points) {
             const values2 = points.match(/-?\d+(?:\.\d+)?/g)?.map(Number) || [];
@@ -231612,10 +231733,9 @@ A.method() {
             }
           }
           const d10 = child.getAttribute?.("d");
-          if (d10) {
-            const values2 = d10.match(/-?\d+(?:\.\d+)?/g)?.map(Number) || [];
-            for (let i10 = 0; i10 + 1 < values2.length; i10 += 2) {
-              includePoint(bounds4, values2[i10] + offset.x, values2[i10 + 1] + offset.y);
+          if (d10 && d10.length < 500) {
+            for (const [px2, py] of parseSvgPathPoints(d10)) {
+              includePoint(bounds4, px2 + offset.x, py + offset.y);
             }
           }
         }
@@ -231623,20 +231743,96 @@ A.method() {
           return null;
         }
         return {
-          width: Math.max(10, bounds4.maxX - Math.min(0, bounds4.minX)),
-          height: Math.max(10, bounds4.maxY - Math.min(0, bounds4.minY))
+          minX: bounds4.minX,
+          minY: bounds4.minY,
+          maxX: bounds4.maxX,
+          maxY: bounds4.maxY,
+          width: Math.max(10, bounds4.maxX - bounds4.minX),
+          height: Math.max(10, bounds4.maxY - bounds4.minY)
         };
       }
-      function patchSvgMetrics(window3) {
+      function normalizeSvgOutput(svgText) {
+        const viewBoxMatch = /viewBox="([^"]+)"/.exec(svgText);
+        if (viewBoxMatch) {
+          const vals = viewBoxMatch[1].trim().split(/\s+/).map(Number);
+          if (vals.length === 4 && vals.every(Number.isFinite) && vals[2] > 0 && vals[3] > 0) {
+            const [, , w11] = vals;
+            const nextStyle2 = `style="max-width: ${w11}px;"`;
+            const svgWithStyle = /<svg\b[^>]*\sstyle="[^"]*"/.test(svgText) ? svgText.replace(/(<svg\b[^>]*?)\sstyle="[^"]*"/, `$1 ${nextStyle2}`) : svgText.replace("<svg ", `<svg ${nextStyle2} `);
+            return svgWithStyle;
+          }
+        }
+        const { document: document2 } = parseHTML(svgText);
+        const svg2 = document2.querySelector("svg");
+        if (!svg2) {
+          return svgText;
+        }
+        const bounds4 = estimateSvgExtents(svg2);
+        if (!bounds4) {
+          return svgText;
+        }
+        const padding2 = 10;
+        const minX = bounds4.minX - padding2;
+        const minY = bounds4.minY - padding2;
+        const width3 = Math.max(10, bounds4.width + padding2 * 2);
+        const height2 = Math.max(10, bounds4.height + padding2 * 2);
+        const nextViewBox = `viewBox="${minX} ${minY} ${width3} ${height2}"`;
+        const nextStyle = `style="max-width: ${width3}px;"`;
+        let normalized = viewBoxMatch ? svgText.replace(/viewBox="[^"]+"/, nextViewBox) : svgText.replace("<svg ", `<svg ${nextViewBox} `);
+        normalized = /<svg\b[^>]*\sstyle="[^"]*"/.test(normalized) ? normalized.replace(/(<svg\b[^>]*?)\sstyle="[^"]*"/, `$1 ${nextStyle}`) : normalized.replace("<svg ", `<svg ${nextStyle} `);
+        return normalized;
+      }
+      function patchSvgMetrics(window3, javaMetrics) {
         const SVGElement3 = window3.SVGElement || window3.Element;
         if (!SVGElement3?.prototype) {
           return;
         }
+        function realTextWidth(element3) {
+          if (!javaMetrics) return estimateTextWidth(element3);
+          const text4 = visibleText(element3);
+          if (!text4) return 0;
+          const fontSize = parseFontSize2(element3);
+          const fontFamily = parseFontFamily(element3);
+          try {
+            return Number(javaMetrics.measureWidth(text4, fontSize, fontFamily)) || estimateTextWidth(element3);
+          } catch (_6) {
+            return estimateTextWidth(element3);
+          }
+        }
+        function realBox(element3) {
+          const tagName19 = String(element3?.tagName || "").toLowerCase();
+          if (tagName19 === "svg" || String(element3?.getAttribute?.("class") || "").split(/\s+/).includes("root")) {
+            const extents = estimateSvgExtents(element3);
+            return extents || { width: 1024, height: 768 };
+          }
+          const attrW = Number.parseFloat(element3?.getAttribute?.("width"));
+          const attrH = Number.parseFloat(element3?.getAttribute?.("height"));
+          if (Number.isFinite(attrW) || Number.isFinite(attrH)) {
+            return {
+              width: Number.isFinite(attrW) ? attrW : realTextWidth(element3),
+              height: Number.isFinite(attrH) ? attrH : 16
+            };
+          }
+          if (tagName19 === "style" || tagName19 === "script") return { width: 0, height: 0 };
+          if (!javaMetrics) return estimateBox(element3);
+          const text4 = visibleText(element3);
+          const fontSize = parseFontSize2(element3);
+          const fontFamily = parseFontFamily(element3);
+          try {
+            const w11 = Number(javaMetrics.measureWidth(text4, fontSize, fontFamily)) || estimateTextWidth(element3);
+            const h10 = Number(javaMetrics.measureHeight(fontSize, fontFamily)) * Math.max(1, estimateLineCount(element3, text4));
+            return { width: w11, height: h10 };
+          } catch (_6) {
+            return estimateBox(element3);
+          }
+        }
         SVGElement3.prototype.getBBox = function getBBox() {
-          const { width: width3, height: height2 } = estimateBox(this);
+          const { width: width3, height: height2 } = realBox(this);
+          const tagName19 = String(this?.tagName || "").toLowerCase();
+          const y10 = tagName19 === "text" || tagName19 === "tspan" ? -height2 * 0.75 : 0;
           return {
             x: 0,
-            y: 0,
+            y: y10,
             width: width3,
             height: height2,
             top: 0,
@@ -231649,7 +231845,7 @@ A.method() {
           };
         };
         SVGElement3.prototype.getComputedTextLength = function getComputedTextLength() {
-          return estimateTextWidth(this);
+          return realTextWidth(this);
         };
         SVGElement3.prototype.getBoundingClientRect = function getBoundingClientRect() {
           const box = this.getBBox();
@@ -231681,9 +231877,9 @@ A.method() {
         patchElementDimensions(window3.Element?.prototype);
         patchElementDimensions(window3.HTMLElement?.prototype);
       }
-      function installDom() {
+      function installDom(javaMetrics) {
         const { window: window3, document: document2 } = parseHTML("<!doctype html><html><body></body></html>");
-        patchSvgMetrics(window3);
+        patchSvgMetrics(window3, javaMetrics);
         window3.getComputedStyle = window3.getComputedStyle || function getComputedStyle2(element3) {
           const style3 = element3?.style || {};
           return {
@@ -231706,13 +231902,33 @@ A.method() {
         document2.createElement = function createElement(name) {
           const element3 = originalCreateElement(name);
           if (String(name).toLowerCase() === "canvas") {
+            let canvasFont = "14px sans-serif";
             element3.getContext = function getContext(type3) {
               if (type3 !== "2d") {
                 return null;
               }
               return {
+                get font() {
+                  return canvasFont;
+                },
+                set font(v10) {
+                  canvasFont = v10 || canvasFont;
+                },
                 measureText(text4) {
-                  const width3 = Math.max(1, String(text4 || "").length * 8);
+                  let width3;
+                  if (javaMetrics) {
+                    try {
+                      const match2 = /(\d+(?:\.\d+)?)px\s+(.+)/.exec(canvasFont);
+                      const fontSize = match2 ? Number(match2[1]) : 14;
+                      const fontFamily = match2 ? match2[2] : "sans-serif";
+                      width3 = Number(javaMetrics.measureWidth(String(text4 || ""), fontSize, fontFamily));
+                    } catch (_6) {
+                      width3 = 0;
+                    }
+                  }
+                  if (!width3) {
+                    width3 = Math.max(1, String(text4 || "").length * 8);
+                  }
                   return {
                     width: width3,
                     actualBoundingBoxAscent: 11,
@@ -231784,11 +232000,11 @@ A.method() {
         };
         return window3;
       }
-      globalThis.renderMermaidToSvg = async function renderMermaidToSvg(definition) {
+      globalThis.renderMermaidToSvg = async function renderMermaidToSvg(definition, javaMetrics) {
         if (!definition || !definition.trim()) {
           throw new Error("Mermaid definition is required");
         }
-        const window3 = installDom();
+        const window3 = installDom(javaMetrics);
         const { default: mermaid2 } = await Promise.resolve().then(() => (init_mermaid_esm(), mermaid_esm_exports));
         const { default: zenuml } = await Promise.resolve().then(() => (init_mermaid_zenuml_core(), mermaid_zenuml_core_exports));
         const id34 = "dmtools-mermaid";
@@ -231797,14 +232013,23 @@ A.method() {
           securityLevel: "loose",
           deterministicIds: true,
           deterministicIDSeed: "dmtools",
+          theme: "default",
+          look: "classic",
+          htmlLabels: false,
           flowchart: {
+            htmlLabels: false
+          },
+          class: {
+            htmlLabels: false
+          },
+          er: {
             htmlLabels: false
           }
         });
         await mermaid2.registerExternalDiagrams([zenuml]);
         try {
           const result = await mermaid2.render(id34, definition);
-          return result.svg;
+          return normalizeSvgOutput(result.svg);
         } catch (error3) {
           if (error3?.stack) {
             throw new Error(error3.stack);

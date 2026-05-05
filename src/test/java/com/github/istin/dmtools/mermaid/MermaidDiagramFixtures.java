@@ -48,19 +48,29 @@ final class MermaidDiagramFixtures {
                           CUSTOMER {
                             string id
                             string name
+                            string email
                           }
                           ORDER {
                             string id
                             date createdAt
+                            string status
+                          }
+                          LINE_ITEM {
+                            string id
+                            int quantity
+                          }
+                          PRODUCT {
+                            string sku
+                            string title
                           }
                         """),
                 fixture("state", """
                         stateDiagram-v2
-                          [*] --> Blocked
-                          Blocked --> Backlog : blockers done
-                          Backlog --> InProgress : sprint starts
-                          InProgress --> Done : accepted
-                          Done --> [*]
+                          [*] --> Still
+                          Still --> Moving
+                          Moving --> Still
+                          Moving --> Crash
+                          Crash --> [*]
                         """),
                 fixture("mindmap", """
                         mindmap
@@ -113,34 +123,42 @@ final class MermaidDiagramFixtures {
                         """),
                 fixture("git", """
                         gitGraph
-                          commit
+                          commit id: "init"
+                          commit id: "renderer"
                           branch renderer
                           checkout renderer
-                          commit
-                          commit
+                          commit id: "svg"
+                          commit id: "png"
                           checkout main
+                          commit id: "docs"
                           merge renderer
+                          commit id: "release"
                         """),
                 fixture("ishikawa", """
-                        ishikawa
-                          diagram
-                            Rendering quality
-                              DOM shim
+                        ishikawa-beta
+                          Rendering quality
+                            DOM
+                              Missing layout
                               Text metrics
-                              SVG serialization
-                            Integration
-                              Gradle composite
-                              CLI adapter
+                            SVG
+                              CSS support
+                              ViewBox
+                            PNG
+                              Batik
+                              Transparency
+                            Tests
+                              Fixtures
+                              Visual report
                         """),
                 fixture("kanban", """
                         kanban
-                          Backlog
-                            [DOM shim]
-                            [Mermaid bundle]
-                          In Progress
-                            [CLI adapter]
-                          Done
-                            [Renderer repo]
+                          backlog[Backlog]
+                            dom[DOM shim]
+                            bundle[Mermaid bundle]
+                          progress[In Progress]
+                            cli[CLI adapter]
+                          done[Done]
+                            repo[Renderer repo]
                         """),
                 fixture("packet", """
                         packet-beta

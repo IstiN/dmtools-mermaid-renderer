@@ -19,17 +19,20 @@ class MermaidCompatibilityReportTest {
         Files.createDirectories(outputDir);
 
         MermaidRenderer renderer = new MermaidRenderer();
-        StringBuilder report = new StringBuilder("diagram,svg,png,error\n");
+        StringBuilder report = new StringBuilder("diagram,support,svg,png,error\n");
         int svgRendered = 0;
 
         for (MermaidDiagramFixtures.Fixture fixture : MermaidDiagramFixtures.all()) {
             Path svg = outputDir.resolve(fixture.name() + ".svg");
             Path png = outputDir.resolve(fixture.name() + ".png");
+            MermaidDiagramSupport.Level support = MermaidDiagramSupport.level(
+                    MermaidDiagramSupport.detectType(fixture.definition())
+            );
             String svgStatus = "FAIL";
             String pngStatus = "FAIL";
             String error = "";
             try {
-                renderer.renderToSvgFile(fixture.definition(), svg);
+                renderer.renderToSvgFileUnchecked(fixture.definition(), svg);
                 svgStatus = "PASS";
                 svgRendered++;
             } catch (Exception e) {
@@ -37,13 +40,15 @@ class MermaidCompatibilityReportTest {
             }
             if ("PASS".equals(svgStatus)) {
                 try {
-                    renderer.renderToPng(fixture.definition(), png);
+                    renderer.renderToPngUnchecked(fixture.definition(), png);
                     pngStatus = "PASS";
                 } catch (Exception e) {
                     error = e.getMessage();
                 }
             }
             report.append(fixture.name())
+                    .append(',')
+                    .append(support)
                     .append(',')
                     .append(svgStatus)
                     .append(',')
