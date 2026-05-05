@@ -151,6 +151,7 @@ public class MermaidRenderer {
                 .replaceAll("(?s)<filter\\b[^>]*>.*?</filter>", "")
                 .replaceAll("(?s)@keyframes\\s+[^\\{]+\\{.*?\\}\\s*\\}", "")
                 .replaceAll("animation:[^;\"}]+;?", "")
+                .replaceAll("filter:[^;\"}]+;?", "")
                 .replaceAll("\\sfilter=\"url\\(#[^)]+\\)\"", "")
                 .replace("orient=\"auto-start-reverse\"", "orient=\"auto\"")
                 .replace("alignment-baseline=\"central\"", "alignment-baseline=\"middle\"")
