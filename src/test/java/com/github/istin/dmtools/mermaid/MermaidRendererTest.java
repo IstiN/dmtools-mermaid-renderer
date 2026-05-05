@@ -122,10 +122,11 @@ class MermaidRendererTest {
     void rejectsUnsupportedDiagramTypes() {
         IllegalArgumentException exception = assertThrows(
                 IllegalArgumentException.class,
-                () -> new MermaidRenderer().renderToSvg("pie title Pets")
+                () -> new MermaidRenderer().renderToSvg("notAMermaidDiagram")
         );
 
-        assertTrue(exception.getMessage().contains("Unsupported Mermaid diagram type"));
+        assertTrue(exception.getMessage().contains("No diagram type detected")
+                || exception.getMessage().contains("Unsupported Mermaid diagram type"));
     }
 
     private void assertPng(Path outputPath) throws Exception {

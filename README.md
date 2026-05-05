@@ -8,12 +8,20 @@ The production direction is:
 2. SVG to PNG through Apache Batik.
 3. Keep renderer-specific dependencies and tests outside `dmtools-core`.
 
-Current implementation is a standalone renderer baseline with SVG and PNG outputs plus tests for multiple Mermaid-style diagram types. The next production step is replacing the internal lightweight renderer with the `IstiN/mermaid` headless bundle and a Java-backed DOM/SVG shim.
+Current implementation bundles Mermaid JS for GraalJS, provides a lightweight DOM/SVG runtime through `linkedom`, and converts SVG output to PNG through Apache Batik.
 
 ## Local usage
 
 ```bash
+npm install
+npm run build:engine
 ./gradlew test
 ./gradlew runRenderer --args='mermaid_to_svg "flowchart TD; A[Start] --> B[Done]" --output diagram.svg'
 ./gradlew runRenderer --args='mermaid_to_png "flowchart TD; A[Start] --> B[Done]" --output diagram.png'
+```
+
+To generate SVG/PNG compatibility artifacts for the supported fixture set:
+
+```bash
+./gradlew test -Dmermaid.compat.outputDir=build/mermaid-compatibility
 ```

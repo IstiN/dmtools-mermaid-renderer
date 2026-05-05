@@ -9,6 +9,7 @@ import org.graalvm.polyglot.HostAccess;
 import org.graalvm.polyglot.PolyglotException;
 import org.graalvm.polyglot.Source;
 import org.graalvm.polyglot.Value;
+import org.graalvm.polyglot.proxy.ProxyExecutable;
 
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
@@ -18,6 +19,7 @@ import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.concurrent.atomic.AtomicReference;
 
 public class MermaidRenderer {
 
@@ -51,12 +53,57 @@ public class MermaidRenderer {
                     throw new IllegalStateException("Mermaid renderer did not expose renderMermaidToSvg");
                 }
                 try {
-                    return renderFunction.execute(definition).asString();
+                    Value result = renderFunction.execute(definition);
+                    return resolveStringResult(context, result);
                 } catch (PolyglotException e) {
-                    throw new IllegalArgumentException(e.getMessage(), e);
+                    throw new IllegalArgumentException(formatPolyglotError(e), e);
                 }
             }
         }
+    }
+
+    private String formatPolyglotError(PolyglotException e) {
+        StringBuilder message = new StringBuilder(e.getMessage() == null ? "Mermaid rendering failed" : e.getMessage());
+        int frameCount = 0;
+        for (PolyglotException.StackFrame frame : e.getPolyglotStackTrace()) {
+            if (frameCount++ >= 6) {
+                break;
+            }
+            message.append(" at ").append(frame);
+        }
+        return message.toString();
+    }
+
+    private String resolveStringResult(Context context, Value result) {
+        if (result.isString()) {
+            return result.asString();
+        }
+        if (!result.hasMember("then")) {
+            throw new IllegalStateException("Mermaid renderer returned a non-string result: " + result);
+        }
+
+        AtomicReference<String> resolved = new AtomicReference<>();
+        AtomicReference<RuntimeException> rejected = new AtomicReference<>();
+        result.invokeMember("then",
+                (ProxyExecutable) args -> {
+                    resolved.set(args.length > 0 ? args[0].asString() : "");
+                    return null;
+                },
+                (ProxyExecutable) args -> {
+                    String message = args.length > 0 ? args[0].toString() : "Unknown Mermaid rendering error";
+                    rejected.set(new IllegalArgumentException(message));
+                    return null;
+                });
+        for (int i = 0; i < 1024 && resolved.get() == null && rejected.get() == null; i++) {
+            context.eval("js", "globalThis.__dmtoolsDrainTimers?.(); Promise.resolve();");
+        }
+        if (rejected.get() != null) {
+            throw rejected.get();
+        }
+        if (resolved.get() == null) {
+            throw new IllegalStateException("Mermaid renderer promise did not resolve synchronously");
+        }
+        return resolved.get();
     }
 
     public Path renderToSvgFile(String definition, Path outputPath) throws IOException {
@@ -88,10 +135,27 @@ public class MermaidRenderer {
     }
 
     private void convertSvgToPng(String svg, Path outputPath) throws IOException, TranscoderException {
+        String normalizedSvg = normalizeSvgForBatik(svg);
         PNGTranscoder transcoder = new PNGTranscoder();
-        try (ByteArrayInputStream inputStream = new ByteArrayInputStream(svg.getBytes(StandardCharsets.UTF_8));
+        try (ByteArrayInputStream inputStream = new ByteArrayInputStream(normalizedSvg.getBytes(StandardCharsets.UTF_8));
              OutputStream outputStream = Files.newOutputStream(outputPath)) {
-            transcoder.transcode(new TranscoderInput(inputStream), new TranscoderOutput(outputStream));
+            TranscoderInput input = new TranscoderInput(inputStream);
+            input.setURI(outputPath.toUri().toString());
+            transcoder.transcode(input, new TranscoderOutput(outputStream));
         }
+    }
+
+    private String normalizeSvgForBatik(String svg) {
+        return svg
+                .replaceFirst("<svg\\b(?![^>]*xmlns:xlink=)", "<svg xmlns:xlink=\"http://www.w3.org/1999/xlink\"")
+                .replaceAll("(?s)<filter\\b[^>]*>.*?</filter>", "")
+                .replaceAll("\\sfilter=\"url\\(#[^)]+\\)\"", "")
+                .replace("orient=\"auto-start-reverse\"", "orient=\"auto\"")
+                .replaceAll("<rect([^>]*?)(?<!/) />", "<rect$1></rect>")
+                .replaceAll("<rect((?:(?!\\bwidth=)[^>])*)>", "<rect width=\"1\"$1>")
+                .replaceAll("<rect((?:(?!\\bheight=)[^>])*)>", "<rect height=\"1\"$1>")
+                .replaceAll("<image\\s+href=", "<image xlink:href=")
+                .replaceAll("(?s)<image\\b(?![^>]*(?:href|xlink:href)=)[^>]*/>", "")
+                .replaceAll("(?s)<image\\b(?![^>]*(?:href|xlink:href)=)[^>]*>.*?</image>", "");
     }
 }

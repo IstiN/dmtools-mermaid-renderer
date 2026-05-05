@@ -30,6 +30,9 @@ dependencies {
 
 test {
     useJUnitPlatform()
+    if (System.getProperty('mermaid.compat.outputDir') != null) {
+        systemProperty 'mermaid.compat.outputDir', System.getProperty('mermaid.compat.outputDir')
+    }
 }
 
 tasks.register('runRenderer', JavaExec) {

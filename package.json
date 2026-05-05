@@ -1,0 +1,27 @@
+{
+  "name": "dmtools-mermaid-renderer",
+  "version": "1.0.0",
+  "description": "Java renderer library for converting Mermaid diagram text to SVG and PNG.",
+  "main": "index.js",
+  "scripts": {
+    "build:engine": "node scripts/build-mermaid-engine.mjs"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/IstiN/dmtools-mermaid-renderer.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/IstiN/dmtools-mermaid-renderer/issues"
+  },
+  "homepage": "https://github.com/IstiN/dmtools-mermaid-renderer#readme",
+  "devDependencies": {
+    "@mermaid-js/mermaid-zenuml": "^0.2.2",
+    "esbuild": "^0.25.12",
+    "linkedom": "^0.18.12",
+    "mermaid": "^11.14.0"
+  }
+}
