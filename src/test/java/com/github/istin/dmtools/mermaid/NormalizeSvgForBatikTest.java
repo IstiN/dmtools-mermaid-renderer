@@ -310,6 +310,38 @@ class NormalizeSvgForBatikTest {
             String result = renderer.inlineCssFillStroke(svg);
             assertEquals(svg, result);
         }
+
+        @Test
+        void ancestorClassCheckPreventsWrongTextFill() {
+            // .section-root text{fill:#ffffff} should NOT apply to text outside .section-root
+            String css = ".section-root text{fill:#ffffff;} .section-0 text{fill:black;}";
+            String svg = svgWrap(css,
+                    "<g class=\"section-0\"><text>visible</text></g>"
+                    + "<g class=\"section-root\"><text>hidden</text></g>");
+            String result = renderer.inlineCssFillStroke(svg);
+            // Text inside .section-0 should get fill="black", not #ffffff
+            int sec0Idx = result.indexOf("visible");
+            int secRootIdx = result.indexOf("hidden");
+            String beforeVisible = result.substring(Math.max(0, sec0Idx - 100), sec0Idx);
+            String beforeHidden = result.substring(Math.max(0, secRootIdx - 100), secRootIdx);
+            assertTrue(beforeVisible.contains("fill=\"black\""),
+                    "text inside .section-0 should get fill=black");
+            assertTrue(beforeHidden.contains("fill=\"#ffffff\""),
+                    "text inside .section-root should get fill=#ffffff");
+        }
+
+        @Test
+        void doesNotApplyAncestorRuleToUnrelatedElement() {
+            // .special rect{fill:red} should NOT apply to rect outside .special
+            String css = ".special rect{fill:red;}";
+            String svg = svgWrap(css,
+                    "<g class=\"normal\"><rect width=\"10\" height=\"10\"></rect></g>"
+                    + "<g class=\"special\"><rect width=\"10\" height=\"10\"></rect></g>");
+            String result = renderer.inlineCssFillStroke(svg);
+            // Only one rect should have fill="red"
+            assertEquals(1, countOccurrences(result, "fill=\"red\""),
+                    "only rect inside .special should get fill=red");
+        }
     }
 
     // ── HSL color conversion ──────────────────────────────────────────────
@@ -444,7 +476,8 @@ class NormalizeSvgForBatikTest {
                     "<defs><marker id=\"oneOrMore\"><path d=\"M0,0L5,5L0,10\"/></marker></defs>"
                     + "<rect width=\"10\" height=\"10\"/>");
             String result = renderer.normalizeSvgForBatik(svg);
-            assertTrue(result.contains("<path fill=\"none\""),
+            // Marker paths should get fill="none" — attribute order may vary after DOM serialization
+            assertTrue(result.contains("fill=\"none\"") && result.contains("<path"),
                     "marker paths must get fill=\"none\" via injection");
         }
 

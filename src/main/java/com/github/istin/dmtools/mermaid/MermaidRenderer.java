@@ -26,6 +26,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -229,14 +230,15 @@ public class MermaidRenderer {
         // Batik may not apply CSS class rules with compound selectors (#id .class) to edge paths.
         // Inject fill="none" directly on paths that have relationship/edge classes.
         result = injectEdgeFillNone(result);
-        // <rect class="background"> has no explicit fill — Batik defaults to black.
-        // SVG 1.1 / Batik does not recognise "transparent"; use "none" instead.
-        result = result.replaceAll(
-                "(\\bclass=\"[^\"]*\\bbackground\\b[^\"]*\")",
-                "$1 fill=\"none\"");
         // Batik often fails to resolve CSS selectors like `#id .class element` and
-        // `#id .classA.classB`. Inline fill/stroke from CSS rules as presentation attributes.
+        // `#id .classA.classB`. Inline fill/stroke from CSS rules as presentation attributes
+        // using DOM-based ancestor class checking for correct specificity.
         result = inlineCssFillStroke(result);
+        // After CSS inlining, any <rect class="background"> that STILL has no fill
+        // would default to black in Batik. Set fill="none" as a safe fallback.
+        result = result.replaceAll(
+                "<rect(?=[^>]*\\bclass=\"[^\"]*\\bbackground\\b)(?![^>]*\\bfill=)([^>]*?)(/?>)",
+                "<rect fill=\"none\"$1$2");
         return result;
     }
 
@@ -308,7 +310,6 @@ public class MermaidRenderer {
             String stroke = extractCssProp(body, "stroke");
             if (fill == null && stroke == null) continue;
 
-            // Handle comma-separated selectors
             for (String sel : selectorGroup.split(",")) {
                 sel = sel.trim();
                 if (sel.isEmpty()) continue;
@@ -320,51 +321,89 @@ public class MermaidRenderer {
         }
         if (rules.isEmpty()) return svg;
 
-        // Process SVG elements: find elements and inject matching fill/stroke
-        // Match opening tags of common SVG elements
-        Pattern elemPattern = Pattern.compile("<(rect|path|circle|ellipse|polygon|line|text|g)\\b([^>]*?)(/?>)");
-        Matcher elemMatcher = elemPattern.matcher(svg);
-        StringBuffer sb = new StringBuffer();
-        while (elemMatcher.find()) {
-            String tagName = elemMatcher.group(1);
-            String attrs = elemMatcher.group(2);
-            String close = elemMatcher.group(3);
+        // Parse SVG as DOM to get proper ancestor context
+        try {
+            javax.xml.parsers.DocumentBuilderFactory factory =
+                    javax.xml.parsers.DocumentBuilderFactory.newInstance();
+            factory.setNamespaceAware(true);
+            // Disable external entities for security
+            factory.setFeature("http://apache.org/xml/features/nonvalidating/load-external-dtd", false);
+            factory.setFeature("http://xml.org/sax/features/external-general-entities", false);
+            javax.xml.parsers.DocumentBuilder builder = factory.newDocumentBuilder();
+            org.w3c.dom.Document doc = builder.parse(
+                    new ByteArrayInputStream(svg.getBytes(StandardCharsets.UTF_8)));
 
-            // Extract class list from element
-            Matcher classMatcher = Pattern.compile("\\bclass=\"([^\"]+)\"").matcher(attrs);
-            List<String> classes = new ArrayList<>();
-            if (classMatcher.find()) {
-                for (String c : classMatcher.group(1).split("\\s+")) {
-                    if (!c.isEmpty()) classes.add(c);
-                }
-            }
+            // Walk all elements and inject fill/stroke from matching CSS rules
+            inlineOnElement(doc.getDocumentElement(), rules);
 
-            // Find all matching rules; last one wins (CSS cascade order)
-            String bestFill = null;
-            String bestStroke = null;
-            for (CssRule rule : rules) {
-                if (rule.matches(tagName, classes)) {
-                    if (rule.fill != null) bestFill = rule.fill;
-                    if (rule.stroke != null) bestStroke = rule.stroke;
-                }
-            }
+            // Serialize back to string
+            javax.xml.transform.TransformerFactory tf = javax.xml.transform.TransformerFactory.newInstance();
+            javax.xml.transform.Transformer transformer = tf.newTransformer();
+            transformer.setOutputProperty(javax.xml.transform.OutputKeys.OMIT_XML_DECLARATION, "yes");
+            java.io.StringWriter sw = new java.io.StringWriter();
+            transformer.transform(
+                    new javax.xml.transform.dom.DOMSource(doc),
+                    new javax.xml.transform.stream.StreamResult(sw));
+            return sw.toString();
+        } catch (Exception e) {
+            // If DOM parsing fails, return SVG unchanged
+            return svg;
+        }
+    }
 
-            // Inject as presentation attributes (only if element doesn't already have them)
-            StringBuilder extra = new StringBuilder();
-            if (bestFill != null && !attrs.contains("fill=")) {
-                extra.append(" fill=\"").append(bestFill).append("\"");
-            }
-            if (bestStroke != null && !attrs.contains("stroke=")) {
-                extra.append(" stroke=\"").append(bestStroke).append("\"");
-            }
+    private void inlineOnElement(org.w3c.dom.Element element, List<CssRule> rules) {
+        String tagName = element.getLocalName();
+        if (tagName == null) tagName = element.getTagName();
 
-            if (extra.length() > 0) {
-                elemMatcher.appendReplacement(sb,
-                        Matcher.quoteReplacement("<" + tagName + attrs + extra + close));
+        // Collect element's own classes
+        String classAttr = element.getAttribute("class");
+        List<String> classes = new ArrayList<>();
+        if (classAttr != null && !classAttr.isEmpty()) {
+            for (String c : classAttr.split("\\s+")) {
+                if (!c.isEmpty()) classes.add(c);
             }
         }
-        elemMatcher.appendTail(sb);
-        return sb.toString();
+
+        // Collect ancestor classes (walk up the tree)
+        Set<String> ancestorClasses = new java.util.HashSet<>();
+        org.w3c.dom.Node parent = element.getParentNode();
+        while (parent instanceof org.w3c.dom.Element) {
+            org.w3c.dom.Element pe = (org.w3c.dom.Element) parent;
+            String pc = pe.getAttribute("class");
+            if (pc != null && !pc.isEmpty()) {
+                for (String c : pc.split("\\s+")) {
+                    if (!c.isEmpty()) ancestorClasses.add(c);
+                }
+            }
+            parent = parent.getParentNode();
+        }
+
+        // Find best matching fill/stroke (last matching rule wins = CSS cascade order)
+        String bestFill = null;
+        String bestStroke = null;
+        for (CssRule rule : rules) {
+            if (rule.matches(tagName, classes, ancestorClasses)) {
+                if (rule.fill != null) bestFill = rule.fill;
+                if (rule.stroke != null) bestStroke = rule.stroke;
+            }
+        }
+
+        // Inject as presentation attributes (only if element doesn't already have them)
+        if (bestFill != null && !element.hasAttribute("fill")) {
+            element.setAttribute("fill", bestFill);
+        }
+        if (bestStroke != null && !element.hasAttribute("stroke")) {
+            element.setAttribute("stroke", bestStroke);
+        }
+
+        // Recurse into children
+        org.w3c.dom.NodeList children = element.getChildNodes();
+        for (int i = 0; i < children.getLength(); i++) {
+            org.w3c.dom.Node child = children.item(i);
+            if (child instanceof org.w3c.dom.Element) {
+                inlineOnElement((org.w3c.dom.Element) child, rules);
+            }
+        }
     }
 
     private String extractCssProp(String cssBody, String propName) {
@@ -430,10 +469,10 @@ public class MermaidRenderer {
         return new CssRule(targetElement, requiredClasses, ancestorClasses, fill, stroke);
     }
 
-    private static class CssRule {
+    static class CssRule {
         final String targetElement; // null = any element
         final List<String> requiredClasses; // classes the element itself must have
-        final List<String> ancestorClasses; // classes some ancestor must have (not checked — we inline conservatively)
+        final List<String> ancestorClasses; // classes some ancestor must have
         final String fill;
         final String stroke;
 
@@ -446,16 +485,17 @@ public class MermaidRenderer {
             this.stroke = stroke;
         }
 
-        boolean matches(String elemTag, List<String> elemClasses) {
+        boolean matches(String elemTag, List<String> elemClasses, Set<String> elemAncestorClasses) {
             // Check element type
             if (targetElement != null && !targetElement.equals(elemTag)) return false;
             // Check required classes on the element itself
             for (String rc : requiredClasses) {
                 if (!elemClasses.contains(rc)) return false;
             }
-            // We cannot check ancestor classes with regex-based processing,
-            // but most Mermaid diagrams have the ancestor classes present.
-            // Skip ancestor check — this is conservative inlining.
+            // Check ancestor class requirements
+            for (String ac : ancestorClasses) {
+                if (!elemAncestorClasses.contains(ac)) return false;
+            }
             return true;
         }
     }
