@@ -231745,10 +231745,22 @@ A.method() {
             }
           }
           const d10 = child.getAttribute?.("d");
-          if (d10 && d10.length < 500) {
-            for (const [px2, py] of parseSvgPathPoints(d10)) {
+          if (d10) {
+            const pathPoints = d10.length < 2e3 ? parseSvgPathPoints(d10) : parseSvgPathPoints(d10.slice(0, 500));
+            for (const [px2, py] of pathPoints) {
               includePoint(bounds4, px2 + offset.x, py + offset.y);
             }
+          }
+          const cx2 = Number.parseFloat(child.getAttribute?.("cx"));
+          const cy = Number.parseFloat(child.getAttribute?.("cy"));
+          if (Number.isFinite(cx2) || Number.isFinite(cy)) {
+            const r10 = Number.parseFloat(child.getAttribute?.("r")) || 0;
+            const rx2 = Number.parseFloat(child.getAttribute?.("rx")) || r10;
+            const ry = Number.parseFloat(child.getAttribute?.("ry")) || r10;
+            const cxVal = (Number.isFinite(cx2) ? cx2 : 0) + offset.x;
+            const cyVal = (Number.isFinite(cy) ? cy : 0) + offset.y;
+            includePoint(bounds4, cxVal - rx2, cyVal - ry);
+            includePoint(bounds4, cxVal + rx2, cyVal + ry);
           }
         }
         if (!Number.isFinite(bounds4.minX) || !Number.isFinite(bounds4.maxX)) {
@@ -232098,10 +232110,9 @@ A.method() {
             if (anchor2 === "middle") x6 = elementX - width3 / 2;
             else if (anchor2 === "end") x6 = elementX - width3;
             else x6 = elementX;
-            const fontSize = 16;
-            const tspanCount = this.querySelectorAll?.("tspan").length || 1;
-            const singleLineH = height2 / Math.max(1, tspanCount);
-            const ascent = singleLineH * 0.75;
+            const fontSize = parseFontSize2(this);
+            const fontFamily = parseFontFamily(this);
+            const ascent = javaMetrics ? Number(javaMetrics.measureAscent(fontSize, fontFamily)) : height2 * 0.75;
             let baseline = 0;
             const firstTspan = this.querySelector?.("tspan");
             const parseVal = (v10) => {

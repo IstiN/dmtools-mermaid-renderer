@@ -58,6 +58,11 @@ final class JavaTextMetrics {
         return font.getLineMetrics("Ag", FRC).getHeight();
     }
 
+    static double measureAscent(double fontSize, String fontFamily) {
+        Font font = resolveFont(fontFamily, Font.PLAIN, (float) fontSize);
+        return font.getLineMetrics("Ag", FRC).getAscent();
+    }
+
     private static Font resolveFont(String family, int style, float size) {
         String cacheKey = (family == null ? "" : family.toLowerCase(Locale.ROOT)) + "|" + style;
         Font base = BASE_FONT_CACHE.computeIfAbsent(cacheKey, k -> {

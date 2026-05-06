@@ -229,10 +229,27 @@ function estimateSvgExtents(element) {
       }
     }
     const d = child.getAttribute?.('d');
-    if (d && d.length < 500) {
-      for (const [px, py] of parseSvgPathPoints(d)) {
+    if (d) {
+      // Parse path points. For very long paths (>500 chars), parse only the
+      // Move-to (M/m) and first few coordinates to get approximate bounds.
+      const pathPoints = d.length < 2000
+        ? parseSvgPathPoints(d)
+        : parseSvgPathPoints(d.slice(0, 500));
+      for (const [px, py] of pathPoints) {
         includePoint(bounds, px + offset.x, py + offset.y);
       }
+    }
+    // Handle circle/ellipse elements (cx/cy/r/rx/ry attributes)
+    const cx = Number.parseFloat(child.getAttribute?.('cx'));
+    const cy = Number.parseFloat(child.getAttribute?.('cy'));
+    if (Number.isFinite(cx) || Number.isFinite(cy)) {
+      const r = Number.parseFloat(child.getAttribute?.('r')) || 0;
+      const rx = Number.parseFloat(child.getAttribute?.('rx')) || r;
+      const ry = Number.parseFloat(child.getAttribute?.('ry')) || r;
+      const cxVal = (Number.isFinite(cx) ? cx : 0) + offset.x;
+      const cyVal = (Number.isFinite(cy) ? cy : 0) + offset.y;
+      includePoint(bounds, cxVal - rx, cyVal - ry);
+      includePoint(bounds, cxVal + rx, cyVal + ry);
     }
   }
   if (!Number.isFinite(bounds.minX) || !Number.isFinite(bounds.maxX)) {
@@ -634,13 +651,12 @@ function patchSvgMetrics(window, javaMetrics) {
       // Browser getBBox.y = rendered_baseline - ascent.
       // Mermaid edge labels use: <text y="-10.1"><tspan y="-0.1em" dy="1.1em">label</tspan></text>
       // The tspan y overrides text y, then dy shifts from there.
-      const fontSize = 16; // Mermaid default
-      // Ascent is based on ONE line height regardless of multiline content.
-      // height already accounts for all lines, but ascent is the distance from
-      // baseline to top of the first line only (~75% of single line height).
-      const tspanCount = this.querySelectorAll?.('tspan').length || 1;
-      const singleLineH = height / Math.max(1, tspanCount);
-      const ascent = singleLineH * 0.75;
+      const fontSize = parseFontSize(this);
+      const fontFamily = parseFontFamily(this);
+      // Use real AWT ascent for precise alignment with Batik rendering.
+      const ascent = javaMetrics
+        ? Number(javaMetrics.measureAscent(fontSize, fontFamily))
+        : height * 0.75;
       let baseline = 0;
       const firstTspan = this.querySelector?.('tspan');
       // Parse em-based or px values

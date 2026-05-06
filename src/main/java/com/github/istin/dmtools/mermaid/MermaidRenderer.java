@@ -93,9 +93,15 @@ public class MermaidRenderer {
             String family = args.length > 1 && args[1].isString() ? args[1].asString() : "sans-serif";
             return JavaTextMetrics.measureHeight(fontSize, family);
         };
+        ProxyExecutable measureAscent = args -> {
+            double fontSize = args.length > 0 && args[0].fitsInDouble() ? args[0].asDouble() : 16.0;
+            String family = args.length > 1 && args[1].isString() ? args[1].asString() : "sans-serif";
+            return JavaTextMetrics.measureAscent(fontSize, family);
+        };
         return ProxyObject.fromMap(java.util.Map.of(
                 "measureWidth", measureWidth,
-                "measureHeight", measureHeight
+                "measureHeight", measureHeight,
+                "measureAscent", measureAscent
         ));
     }
 
