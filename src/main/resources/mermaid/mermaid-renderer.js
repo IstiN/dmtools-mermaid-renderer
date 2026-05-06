@@ -231720,7 +231720,7 @@ A.method() {
             let left3 = Number.isFinite(x6) ? x6 + offset.x : offset.x;
             let top2 = Number.isFinite(y10) ? y10 + offset.y : offset.y;
             if (tagName19 === "text" || tagName19 === "tspan") {
-              const anchor2 = child.getAttribute?.("text-anchor") || child.style?.textAnchor || "start";
+              const anchor2 = getEffectiveTextAnchor(child);
               if (anchor2 === "end") {
                 left3 -= estW;
               } else if (anchor2 === "middle") {
@@ -231803,6 +231803,69 @@ A.method() {
         let normalized = viewBoxMatch ? svgText.replace(/viewBox="[^"]+"/, nextViewBox) : svgText.replace("<svg ", `<svg ${nextViewBox} `);
         normalized = /<svg\b[^>]*\sstyle="[^"]*"/.test(normalized) ? normalized.replace(/(<svg\b[^>]*?)\sstyle="[^"]*"/, `$1 ${nextStyle}`) : normalized.replace("<svg ", `<svg ${nextStyle} `);
         return normalized;
+      }
+      var cssPropsCache = /* @__PURE__ */ new WeakMap();
+      function buildCssPropMap(svgRoot) {
+        if (cssPropsCache.has(svgRoot)) return cssPropsCache.get(svgRoot);
+        const rules = [];
+        for (const styleEl of svgRoot.querySelectorAll?.("style") || []) {
+          const css = styleEl.textContent || "";
+          if (!css) continue;
+          for (const [, selector, block2] of css.matchAll(/([^{]+)\{([^}]*)\}/g)) {
+            const anchorMatch = /\btext-anchor\s*:\s*([\w-]+)/.exec(block2);
+            const baselineMatch = /\bdominant-baseline\s*:\s*([\w-]+)/.exec(block2);
+            if (!anchorMatch && !baselineMatch) continue;
+            const props = {};
+            if (anchorMatch) props.textAnchor = anchorMatch[1];
+            if (baselineMatch) props.dominantBaseline = baselineMatch[1];
+            for (const subSel of selector.split(",")) {
+              const parts = subSel.trim().split(/[\s>+~]+/);
+              const lastPart = parts[parts.length - 1];
+              const classes3 = (lastPart.match(/\.[-\w]+/g) || []).map((c10) => c10.slice(1));
+              if (classes3.length > 0) {
+                rules.push({ classSet: new Set(classes3), props });
+              }
+            }
+          }
+        }
+        if (rules.length > 0) cssPropsCache.set(svgRoot, rules);
+        return rules;
+      }
+      function getEffectiveCssProps(element3) {
+        const svgRoot = element3.closest?.("svg");
+        if (!svgRoot) return {};
+        const rules = buildCssPropMap(svgRoot);
+        const elementClasses = new Set((element3.getAttribute?.("class") || "").split(/\s+/).filter(Boolean));
+        let best = null;
+        let bestSize = 0;
+        for (const rule of rules) {
+          let allMatch = true;
+          for (const c10 of rule.classSet) {
+            if (!elementClasses.has(c10)) {
+              allMatch = false;
+              break;
+            }
+          }
+          if (allMatch && rule.classSet.size > bestSize) {
+            best = rule.props;
+            bestSize = rule.classSet.size;
+          }
+        }
+        return best || {};
+      }
+      function getEffectiveTextAnchor(element3) {
+        const inline = element3.style?.textAnchor;
+        if (inline) return inline;
+        const cssProps = getEffectiveCssProps(element3);
+        if (cssProps.textAnchor) return cssProps.textAnchor;
+        return element3.getAttribute?.("text-anchor") || element3.closest?.("text")?.getAttribute?.("text-anchor") || "start";
+      }
+      function getEffectiveDominantBaseline(element3) {
+        const inline = element3.style?.dominantBaseline;
+        if (inline) return inline;
+        const cssProps = getEffectiveCssProps(element3);
+        if (cssProps.dominantBaseline) return cssProps.dominantBaseline;
+        return element3.getAttribute?.("dominant-baseline") || "auto";
       }
       function patchSvgMetrics(window3, javaMetrics) {
         const SVGElement3 = window3.SVGElement || window3.Element;
@@ -232029,12 +232092,14 @@ A.method() {
           let y10 = box.y ?? 0;
           if (tagName19 === "text" || tagName19 === "tspan") {
             const elementX = Number.parseFloat(this.getAttribute?.("x")) || 0;
-            const anchor2 = this.getAttribute?.("text-anchor") || this.closest?.("text")?.getAttribute?.("text-anchor") || "start";
+            const anchor2 = getEffectiveTextAnchor(this);
             if (anchor2 === "middle") x6 = elementX - width3 / 2;
             else if (anchor2 === "end") x6 = elementX - width3;
             else x6 = elementX;
             const fontSize = 16;
-            const ascent = height2 * 0.75;
+            const tspanCount = this.querySelectorAll?.("tspan").length || 1;
+            const singleLineH = height2 / Math.max(1, tspanCount);
+            const ascent = singleLineH * 0.75;
             let baseline = 0;
             const firstTspan = this.querySelector?.("tspan");
             const parseVal = (v10) => {
@@ -232055,7 +232120,12 @@ A.method() {
             } else {
               baseline = Number.parseFloat(this.getAttribute?.("y")) || 0;
             }
-            y10 = baseline - ascent;
+            const dominantBaseline = getEffectiveDominantBaseline(this);
+            if (dominantBaseline === "middle") {
+              y10 = baseline - height2 / 2;
+            } else {
+              y10 = baseline - ascent;
+            }
           }
           return {
             x: x6,

@@ -204,8 +204,7 @@ function estimateSvgExtents(element) {
       let left = Number.isFinite(x) ? x + offset.x : offset.x;
       let top = Number.isFinite(y) ? y + offset.y : offset.y;
       if (tagName === 'text' || tagName === 'tspan') {
-        const anchor = child.getAttribute?.('text-anchor')
-          || child.style?.textAnchor || 'start';
+        const anchor = getEffectiveTextAnchor(child);
         if (anchor === 'end') {
           left -= estW;
         } else if (anchor === 'middle') {
@@ -302,6 +301,89 @@ function normalizeSvgOutput(svgText) {
     ? normalized.replace(/(<svg\b[^>]*?)\sstyle="[^"]*"/, `$1 ${nextStyle}`)
     : normalized.replace('<svg ', `<svg ${nextStyle} `);
   return normalized;
+}
+
+// Cache: maps SVG root element → Array<{classSet, props}>
+const cssPropsCache = new WeakMap();
+
+// Parse CSS class rules in the SVG's <style> element for text-layout properties.
+// Each rule is stored as {classSet: Set<string>, props: {textAnchor?, dominantBaseline?}}.
+// Compound selectors like ".foo.bar" require the element to have ALL classes.
+function buildCssPropMap(svgRoot) {
+  if (cssPropsCache.has(svgRoot)) return cssPropsCache.get(svgRoot);
+  const rules = [];
+  for (const styleEl of svgRoot.querySelectorAll?.('style') || []) {
+    const css = styleEl.textContent || '';
+    if (!css) continue;
+    for (const [, selector, block] of css.matchAll(/([^{]+)\{([^}]*)\}/g)) {
+      const anchorMatch = /\btext-anchor\s*:\s*([\w-]+)/.exec(block);
+      const baselineMatch = /\bdominant-baseline\s*:\s*([\w-]+)/.exec(block);
+      if (!anchorMatch && !baselineMatch) continue;
+      const props = {};
+      if (anchorMatch) props.textAnchor = anchorMatch[1];
+      if (baselineMatch) props.dominantBaseline = baselineMatch[1];
+      // Each comma-separated sub-selector is treated independently.
+      // Only extract classes from the LAST simple selector (the target element).
+      // e.g. ".ishikawa .foo.bar" → last part is ".foo.bar" → requires {foo, bar}
+      // e.g. ".ishikawa .foo" → last part is ".foo" → requires {foo}
+      for (const subSel of selector.split(',')) {
+        // Split on CSS combinators (whitespace, >, +, ~) to isolate the last simple selector
+        const parts = subSel.trim().split(/[\s>+~]+/);
+        const lastPart = parts[parts.length - 1];
+        const classes = (lastPart.match(/\.[-\w]+/g) || []).map(c => c.slice(1));
+        if (classes.length > 0) {
+          rules.push({ classSet: new Set(classes), props });
+        }
+      }
+    }
+  }
+  if (rules.length > 0) cssPropsCache.set(svgRoot, rules);
+  return rules;
+}
+
+// Get CSS text-layout properties for an element by matching its classes
+// against CSS rules. Returns the props from the MOST SPECIFIC matching rule
+// (most classes matched), or {} if none match.
+function getEffectiveCssProps(element) {
+  const svgRoot = element.closest?.('svg');
+  if (!svgRoot) return {};
+  const rules = buildCssPropMap(svgRoot);
+  const elementClasses = new Set((element.getAttribute?.('class') || '').split(/\s+/).filter(Boolean));
+  let best = null;
+  let bestSize = 0;
+  for (const rule of rules) {
+    // All classes in rule.classSet must be present in the element
+    let allMatch = true;
+    for (const c of rule.classSet) {
+      if (!elementClasses.has(c)) { allMatch = false; break; }
+    }
+    if (allMatch && rule.classSet.size > bestSize) {
+      best = rule.props;
+      bestSize = rule.classSet.size;
+    }
+  }
+  return best || {};
+}
+
+// Get the effective text-anchor for an element, considering CSS class rules
+// which override presentation attributes (SVG spec: CSS wins over attributes).
+function getEffectiveTextAnchor(element) {
+  const inline = element.style?.textAnchor;
+  if (inline) return inline;
+  const cssProps = getEffectiveCssProps(element);
+  if (cssProps.textAnchor) return cssProps.textAnchor;
+  return element.getAttribute?.('text-anchor')
+    || element.closest?.('text')?.getAttribute?.('text-anchor')
+    || 'start';
+}
+
+// Get the effective dominant-baseline for an element, considering CSS class rules.
+function getEffectiveDominantBaseline(element) {
+  const inline = element.style?.dominantBaseline;
+  if (inline) return inline;
+  const cssProps = getEffectiveCssProps(element);
+  if (cssProps.dominantBaseline) return cssProps.dominantBaseline;
+  return element.getAttribute?.('dominant-baseline') || 'auto';
 }
 
 function patchSvgMetrics(window, javaMetrics) {
@@ -540,9 +622,7 @@ function patchSvgMetrics(window, javaMetrics) {
       //   middle: left edge = x - width/2
       //   end: left edge = x - width
       const elementX = Number.parseFloat(this.getAttribute?.('x')) || 0;
-      const anchor = this.getAttribute?.('text-anchor')
-        || this.closest?.('text')?.getAttribute?.('text-anchor')
-        || 'start';
+      const anchor = getEffectiveTextAnchor(this);
       if (anchor === 'middle') x = elementX - width / 2;
       else if (anchor === 'end') x = elementX - width;
       else x = elementX; // 'start'
@@ -552,7 +632,12 @@ function patchSvgMetrics(window, javaMetrics) {
       // Mermaid edge labels use: <text y="-10.1"><tspan y="-0.1em" dy="1.1em">label</tspan></text>
       // The tspan y overrides text y, then dy shifts from there.
       const fontSize = 16; // Mermaid default
-      const ascent = height * 0.75;
+      // Ascent is based on ONE line height regardless of multiline content.
+      // height already accounts for all lines, but ascent is the distance from
+      // baseline to top of the first line only (~75% of single line height).
+      const tspanCount = this.querySelectorAll?.('tspan').length || 1;
+      const singleLineH = height / Math.max(1, tspanCount);
+      const ascent = singleLineH * 0.75;
       let baseline = 0;
       const firstTspan = this.querySelector?.('tspan');
       // Parse em-based or px values
@@ -577,7 +662,14 @@ function patchSvgMetrics(window, javaMetrics) {
         // No tspan — use text's own y attribute
         baseline = Number.parseFloat(this.getAttribute?.('y')) || 0;
       }
-      y = baseline - ascent;
+      // dominant-baseline: middle means the text CENTER (not baseline) is at y.
+      // getBBox().y = center - height/2 instead of baseline - ascent.
+      const dominantBaseline = getEffectiveDominantBaseline(this);
+      if (dominantBaseline === 'middle') {
+        y = baseline - height / 2;
+      } else {
+        y = baseline - ascent;
+      }
     }
     return {
       x,
