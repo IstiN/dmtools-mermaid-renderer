@@ -78,6 +78,24 @@ class NormalizeSvgForBatikTest {
         }
     }
 
+    // ── empty fill attribute cleanup ─────────────────────────────────────
+    @Nested
+    class EmptyFillCleanup {
+        @Test
+        void removesEmptyFillAttribute() {
+            String svg = svgWrap("<text fill=\"\" class=\"taskText\">Hello</text>");
+            String result = renderer.normalizeSvgForBatik(svg);
+            assertFalse(result.contains("fill=\"\""), "empty fill=\"\" should be removed");
+        }
+
+        @Test
+        void preservesNonEmptyFillAttribute() {
+            String svg = svgWrap("<text fill=\"#333\" class=\"taskText\">Hello</text>");
+            String result = renderer.normalizeSvgForBatik(svg);
+            assertTrue(result.contains("fill=\"#333\""), "non-empty fill should be preserved");
+        }
+    }
+
     // ── orient="auto-start-reverse" fix ───────────────────────────────────
     @Nested
     class OrientFix {
@@ -127,35 +145,43 @@ class NormalizeSvgForBatikTest {
     @Nested
     class MarkerPresentationAttributes {
         @Test
-        void injectsFillNoneOnMarkerPaths() {
+        void injectsFillNoneOnErMarkerPaths() {
             String svg = svgWrap(
-                    "<defs><marker id=\"m1\"><path d=\"M0,0L5,5L0,10\"/></marker></defs>"
+                    "<defs><marker id=\"dmtools-mermaid_er-oneOrMany\"><path d=\"M0,0L5,5L0,10\"/></marker></defs>"
                     + "<rect width=\"10\" height=\"10\"/>");
             String result = renderer.injectMarkerPresentationAttributes(svg);
-            assertTrue(result.contains("<path fill=\"none\""), "marker paths should get fill=\"none\"");
+            assertTrue(result.contains("fill=\"none\""), "ER marker paths should get fill=\"none\"");
         }
 
         @Test
-        void doesNotOverrideExistingFillOnMarkerPath() {
+        void doesNotInjectFillOnNonErMarkerPaths() {
             String svg = svgWrap(
-                    "<defs><marker id=\"m1\"><path fill=\"white\" d=\"M0,0L5,5\"/></marker></defs>"
+                    "<defs><marker id=\"flowchart-pointEnd\"><path d=\"M0,0L5,5L0,10\"/></marker></defs>"
+                    + "<rect width=\"10\" height=\"10\"/>");
+            String result = renderer.injectMarkerPresentationAttributes(svg);
+            assertFalse(result.contains("fill=\"none\""), "non-ER marker paths should NOT get fill=\"none\"");
+        }
+
+        @Test
+        void doesNotOverrideExistingFillOnErMarkerPath() {
+            String svg = svgWrap(
+                    "<defs><marker id=\"dmtools-mermaid_er-zeroOrOne\"><path fill=\"white\" d=\"M0,0L5,5\"/></marker></defs>"
                     + "<rect width=\"10\" height=\"10\"/>");
             String result = renderer.injectMarkerPresentationAttributes(svg);
             assertTrue(result.contains("fill=\"white\""), "existing fill should not be replaced");
-            // Should still have exactly one fill
             assertEquals(1, countOccurrences(result, "fill=\"white\""));
         }
 
         @Test
-        void handlesMultipleMarkers() {
+        void handlesMultipleMarkersMixedErAndNonEr() {
             String svg = svgWrap(
                     "<defs>"
-                    + "<marker id=\"m1\"><path d=\"M0,0L5,5\"/></marker>"
-                    + "<marker id=\"m2\"><path d=\"M0,0L10,10\"/></marker>"
+                    + "<marker id=\"dmtools-mermaid_er-oneOrMany\"><path d=\"M0,0L5,5\"/></marker>"
+                    + "<marker id=\"flowchart-pointEnd\"><path d=\"M0,0L10,10\"/></marker>"
                     + "</defs><rect width=\"10\" height=\"10\"/>");
             String result = renderer.injectMarkerPresentationAttributes(svg);
-            assertEquals(2, countOccurrences(result, "fill=\"none\""),
-                    "both marker paths should get fill=\"none\"");
+            assertEquals(1, countOccurrences(result, "fill=\"none\""),
+                    "only ER marker path should get fill=\"none\"");
         }
     }
 
@@ -371,6 +397,50 @@ class NormalizeSvgForBatikTest {
         }
     }
 
+    // ── RGBA color conversion ─────────────────────────────────────────────
+    @Nested
+    class RgbaColorConversion {
+        @Test
+        void convertsRgbaToHex() {
+            String result = renderer.replaceRgbaColors("fill:rgba(232,232,232, 0.8)");
+            assertFalse(result.contains("rgba("), "rgba should be replaced with hex");
+            assertTrue(result.startsWith("fill:#"), "should produce hex color");
+        }
+
+        @Test
+        void convertsFullyOpaqueRgba() {
+            String result = renderer.replaceRgbaColors("fill:rgba(255,0,0, 1)");
+            assertTrue(result.contains("#FF0000"), "fully opaque rgba(255,0,0,1) should be #FF0000");
+        }
+
+        @Test
+        void convertsFullyTransparentRgba() {
+            String result = renderer.replaceRgbaColors("fill:rgba(0,0,0, 0)");
+            assertTrue(result.contains("#FFFFFF"), "fully transparent rgba against white should be #FFFFFF");
+        }
+
+        @Test
+        void preservesNonRgbaColors() {
+            String result = renderer.replaceRgbaColors("fill:#ff0000");
+            assertEquals("fill:#ff0000", result);
+        }
+    }
+
+    // ── foreignObject removal ─────────────────────────────────────────────
+    @Nested
+    class ForeignObjectRemoval {
+        @Test
+        void removesForeignObjectFromSwitch() {
+            String svg = svgWrap(
+                    "<switch><foreignObject height=\"50\" width=\"150\"><div>Hello</div></foreignObject>"
+                    + "<text>Hello</text></switch>");
+            String result = renderer.normalizeSvgForBatik(svg);
+            assertFalse(result.contains("foreignObject"), "foreignObject should be removed");
+            assertFalse(result.contains("<switch>"), "switch wrapper should be removed");
+            assertTrue(result.contains("<text"), "text fallback should remain");
+        }
+    }
+
     // ── CSS variable resolution ───────────────────────────────────────────
     @Nested
     class CssVariableResolution {
@@ -473,7 +543,7 @@ class NormalizeSvgForBatikTest {
         void erMarkerPathsGetFillNone() {
             String svg = svgWrap(
                     ".marker{fill:#333;} .marker{fill:none;}",
-                    "<defs><marker id=\"oneOrMore\"><path d=\"M0,0L5,5L0,10\"/></marker></defs>"
+                    "<defs><marker id=\"dmtools-mermaid_er-oneOrMany\"><path d=\"M0,0L5,5L0,10\"/></marker></defs>"
                     + "<rect width=\"10\" height=\"10\"/>");
             String result = renderer.normalizeSvgForBatik(svg);
             // Marker paths should get fill="none" — attribute order may vary after DOM serialization

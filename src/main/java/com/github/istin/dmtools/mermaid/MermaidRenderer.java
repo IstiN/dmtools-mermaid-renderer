@@ -201,7 +201,7 @@ public class MermaidRenderer {
     }
 
     String normalizeSvgForBatik(String svg) {
-        String result = resolveCssVariables(replaceHslColors(svg))
+        String result = resolveCssVariables(replaceRgbaColors(replaceHslColors(svg)))
                 .replaceFirst("<svg\\b(?![^>]*xmlns:xlink=)", "<svg xmlns:xlink=\"http://www.w3.org/1999/xlink\"")
                 .replaceAll("(?s)<filter\\b[^>]*>.*?</filter>", "")
                 .replaceAll("(?s)@keyframes\\s+[^\\{]+\\{.*?\\}\\s*\\}", "")
@@ -214,6 +214,9 @@ public class MermaidRenderer {
                 // Batik ignores CSS class rules when an inline style attribute is present,
                 // so malformed/empty style attributes cause paths to render with default fill=black.
                 .replaceAll("\\bstyle=\"[\\s;undefined]*\"", "")
+                // Mermaid sometimes generates fill="" (empty fill attribute) which makes
+                // text invisible. Remove empty fill attributes so CSS can take effect.
+                .replaceAll("\\bfill=\"\"", "")
                 .replace("orient=\"auto-start-reverse\"", "orient=\"auto\"")
                 .replace("alignment-baseline=\"central\"", "alignment-baseline=\"middle\"")
                 .replaceAll("<rect([^>]*?)(?<!/) />", "<rect$1></rect>")
@@ -221,7 +224,13 @@ public class MermaidRenderer {
                 .replaceAll("<rect((?:(?!\\bheight=)[^>])*)>", "<rect height=\"1\"$1>")
                 .replaceAll("<image\\s+href=", "<image xlink:href=")
                 .replaceAll("(?s)<image\\b(?![^>]*(?:href|xlink:href)=)[^>]*/>", "")
-                .replaceAll("(?s)<image\\b(?![^>]*(?:href|xlink:href)=)[^>]*>.*?</image>", "");
+                .replaceAll("(?s)<image\\b(?![^>]*(?:href|xlink:href)=)[^>]*>.*?</image>", "")
+                // Batik picks <foreignObject> inside <switch> even though it can't render HTML.
+                // Remove <foreignObject> blocks so <text> fallback gets rendered.
+                .replaceAll("(?s)<foreignObject[^>]*>.*?</foreignObject>", "")
+                // After removing foreignObject, collapse empty <switch> wrappers
+                .replaceAll("<switch>\\s*", "")
+                .replaceAll("\\s*</switch>", "");
 
         // Batik CSS cascade is unreliable for duplicate selectors with conflicting properties.
         // Force correct fill/stroke on <path> and <circle> elements inside <marker> by injecting
@@ -243,13 +252,12 @@ public class MermaidRenderer {
     }
 
     /**
-     * Finds all {@code <marker>} elements in the SVG and adds {@code fill="none"} and
-     * {@code stroke="inherit"} presentation attributes to their {@code <path>} children
-     * (unless the path already has a fill attribute). Batik ignores {@code !important} in CSS
-     * and may apply the wrong fill to marker paths, causing them to render as filled black shapes.
+     * Injects fill presentation attributes on {@code <path>} children inside {@code <marker>}
+     * elements. Only ER (entity-relationship) markers get {@code fill="none"} (they are line-based
+     * crow's foot symbols). Arrow-tip markers (state, flowchart, block, requirement) are left
+     * untouched so they render as filled shapes.
      */
     String injectMarkerPresentationAttributes(String svg) {
-        // Match each <marker>...</marker> block and process its path/circle children
         Pattern markerPattern = Pattern.compile("(?s)(<marker\\b[^>]*>)(.*?)(</marker>)");
         Matcher m = markerPattern.matcher(svg);
         StringBuffer sb = new StringBuffer();
@@ -257,10 +265,11 @@ public class MermaidRenderer {
             String open = m.group(1);
             String body = m.group(2);
             String close = m.group(3);
-            // Add fill="none" to <path> elements that don't already have a fill attribute
-            body = body.replaceAll("<path(?![^>]*\\bfill=)([^>]*?)(/?>)",
-                    "<path fill=\"none\"$1$2");
-            // Preserve fill="white" on <circle> elements (zero-circle markers), leave others
+            // Only inject fill="none" on ER markers (crow's foot line symbols)
+            if (open.contains("_er-")) {
+                body = body.replaceAll("<path(?![^>]*\\bfill=)([^>]*?)(/?>)",
+                        "<path fill=\"none\"$1$2");
+            }
             m.appendReplacement(sb, Matcher.quoteReplacement(open + body + close));
         }
         m.appendTail(sb);
@@ -308,12 +317,14 @@ public class MermaidRenderer {
 
             String fill = extractCssProp(body, "fill");
             String stroke = extractCssProp(body, "stroke");
-            if (fill == null && stroke == null) continue;
+            String strokeDasharray = extractCssProp(body, "stroke-dasharray");
+            String strokeWidth = extractCssProp(body, "stroke-width");
+            if (fill == null && stroke == null && strokeDasharray == null && strokeWidth == null) continue;
 
             for (String sel : selectorGroup.split(",")) {
                 sel = sel.trim();
                 if (sel.isEmpty()) continue;
-                CssRule rule = parseCssSelector(sel, fill, stroke);
+                CssRule rule = parseCssSelector(sel, fill, stroke, strokeDasharray, strokeWidth);
                 if (rule != null) {
                     rules.add(rule);
                 }
@@ -381,10 +392,14 @@ public class MermaidRenderer {
         // Find best matching fill/stroke (last matching rule wins = CSS cascade order)
         String bestFill = null;
         String bestStroke = null;
+        String bestStrokeDasharray = null;
+        String bestStrokeWidth = null;
         for (CssRule rule : rules) {
             if (rule.matches(tagName, classes, ancestorClasses)) {
                 if (rule.fill != null) bestFill = rule.fill;
                 if (rule.stroke != null) bestStroke = rule.stroke;
+                if (rule.strokeDasharray != null) bestStrokeDasharray = rule.strokeDasharray;
+                if (rule.strokeWidth != null) bestStrokeWidth = rule.strokeWidth;
             }
         }
 
@@ -394,6 +409,12 @@ public class MermaidRenderer {
         }
         if (bestStroke != null && !element.hasAttribute("stroke")) {
             element.setAttribute("stroke", bestStroke);
+        }
+        if (bestStrokeDasharray != null && !element.hasAttribute("stroke-dasharray")) {
+            element.setAttribute("stroke-dasharray", bestStrokeDasharray);
+        }
+        if (bestStrokeWidth != null && !element.hasAttribute("stroke-width")) {
+            element.setAttribute("stroke-width", bestStrokeWidth);
         }
 
         // Recurse into children
@@ -423,7 +444,8 @@ public class MermaidRenderer {
      * - ancestorClasses: CSS classes some ancestor element must have
      * - targetElement: the element type (rect, path, etc.) or null for class-only selectors
      */
-    private CssRule parseCssSelector(String selector, String fill, String stroke) {
+    private CssRule parseCssSelector(String selector, String fill, String stroke,
+                                     String strokeDasharray, String strokeWidth) {
         // Strip leading #id part (e.g., "#dmtools-mermaid ")
         String sel = selector.replaceFirst("^#[\\w-]+\\s+", "");
         if (sel.startsWith("#")) return null; // pure id selector for a different element
@@ -466,7 +488,8 @@ public class MermaidRenderer {
             }
         }
 
-        return new CssRule(targetElement, requiredClasses, ancestorClasses, fill, stroke);
+        return new CssRule(targetElement, requiredClasses, ancestorClasses, fill, stroke,
+                strokeDasharray, strokeWidth);
     }
 
     static class CssRule {
@@ -475,14 +498,18 @@ public class MermaidRenderer {
         final List<String> ancestorClasses; // classes some ancestor must have
         final String fill;
         final String stroke;
+        final String strokeDasharray;
+        final String strokeWidth;
 
         CssRule(String targetElement, List<String> requiredClasses, List<String> ancestorClasses,
-                String fill, String stroke) {
+                String fill, String stroke, String strokeDasharray, String strokeWidth) {
             this.targetElement = targetElement;
             this.requiredClasses = requiredClasses;
             this.ancestorClasses = ancestorClasses;
             this.fill = fill;
             this.stroke = stroke;
+            this.strokeDasharray = strokeDasharray;
+            this.strokeWidth = strokeWidth;
         }
 
         boolean matches(String elemTag, List<String> elemClasses, Set<String> elemAncestorClasses) {
@@ -552,6 +579,31 @@ public class MermaidRenderer {
             double saturation = Double.parseDouble(matcher.group(2)) / 100.0;
             double lightness = Double.parseDouble(matcher.group(3)) / 100.0;
             matcher.appendReplacement(result, Matcher.quoteReplacement(hslToHex(hue, saturation, lightness)));
+        }
+        matcher.appendTail(result);
+        return result.toString();
+    }
+
+    /**
+     * Converts CSS {@code rgba(r, g, b, a)} colors to hex. Batik does not support rgba()
+     * in CSS or presentation attributes. The alpha channel is dropped (premultiplied against white).
+     */
+    String replaceRgbaColors(String svg) {
+        Pattern pattern = Pattern.compile(
+                "rgba\\(\\s*(\\d+)\\s*,\\s*(\\d+)\\s*,\\s*(\\d+)\\s*,\\s*([\\d.]+)\\s*\\)");
+        Matcher matcher = pattern.matcher(svg);
+        StringBuffer result = new StringBuffer();
+        while (matcher.find()) {
+            int r = Integer.parseInt(matcher.group(1));
+            int g = Integer.parseInt(matcher.group(2));
+            int b = Integer.parseInt(matcher.group(3));
+            double a = Double.parseDouble(matcher.group(4));
+            // Premultiply alpha against white background
+            int rr = (int) Math.round(r * a + 255 * (1 - a));
+            int gg = (int) Math.round(g * a + 255 * (1 - a));
+            int bb = (int) Math.round(b * a + 255 * (1 - a));
+            matcher.appendReplacement(result,
+                    Matcher.quoteReplacement(String.format("#%02X%02X%02X", rr, gg, bb)));
         }
         matcher.appendTail(result);
         return result.toString();
