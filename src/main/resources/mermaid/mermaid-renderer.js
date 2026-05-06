@@ -231789,11 +231789,12 @@ A.method() {
             let minX2 = vbX, minY2 = vbY, maxX = vbX + vbW, maxY = vbY + vbH;
             if (contentBounds) {
               const sidePadding = 10;
+              const bottomPadding = 20;
               const topPadding = 25;
               minX2 = Math.min(minX2, contentBounds.minX - sidePadding);
               minY2 = Math.min(minY2, contentBounds.minY - topPadding);
               maxX = Math.max(maxX, contentBounds.maxX + sidePadding);
-              maxY = Math.max(maxY, contentBounds.maxY + sidePadding);
+              maxY = Math.max(maxY, contentBounds.maxY + bottomPadding);
             }
             const w11 = maxX - minX2;
             const h10 = maxY - minY2;

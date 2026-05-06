@@ -207,6 +207,11 @@ public class MermaidRenderer {
     }
 
     String normalizeSvgForBatik(String svg) {
+        // Suppress empty <rect/> / <rect /> placeholder elements before any other processing.
+        // These spacer rects have no attributes and must not gain fill/stroke via CSS inlining,
+        // which would make them render as tiny coloured dots in Batik.
+        svg = svg.replace("<rect/>", "<rect fill=\"none\" stroke=\"none\"/>")
+                 .replace("<rect />", "<rect fill=\"none\" stroke=\"none\"/>");
         String result = resolveCssVariables(replaceRgbaColors(replaceHslColors(svg)))
                 .replaceFirst("<svg\\b(?![^>]*xmlns:xlink=)", "<svg xmlns:xlink=\"http://www.w3.org/1999/xlink\"")
                 .replaceAll("(?s)<filter\\b[^>]*>.*?</filter>", "")

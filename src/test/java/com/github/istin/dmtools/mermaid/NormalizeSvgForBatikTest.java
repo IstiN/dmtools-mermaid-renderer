@@ -659,6 +659,37 @@ class NormalizeSvgForBatikTest {
         }
     }
 
+    // ── EmptyRect ─────────────────────────────────────────────────────────
+    @Nested
+    class EmptyRect {
+
+        @Test
+        void emptyRectSelfClosingNoSpaceGetsSuppressed() {
+            // <rect/> with no attributes is a spacer – must not render as a coloured dot in Batik.
+            String svg = svgWrap("", "<g class=\"node statediagram-state\"><rect/></g>");
+            String result = renderer.normalizeSvgForBatik(svg);
+            assertTrue(result.contains("fill=\"none\" stroke=\"none\""),
+                    "empty <rect/> should get fill=none stroke=none");
+        }
+
+        @Test
+        void emptyRectSelfClosingWithSpaceGetsSuppressed() {
+            String svg = svgWrap("", "<g class=\"node statediagram-state\"><rect /></g>");
+            String result = renderer.normalizeSvgForBatik(svg);
+            assertTrue(result.contains("fill=\"none\" stroke=\"none\""),
+                    "empty <rect /> should get fill=none stroke=none");
+        }
+
+        @Test
+        void nonEmptyRectNotAffected() {
+            // A rect with attributes must NOT be changed by the empty-rect suppression.
+            String svg = svgWrap("", "<rect width=\"100\" height=\"50\" fill=\"#abc\"/>");
+            String result = renderer.normalizeSvgForBatik(svg);
+            assertTrue(result.contains("width=\"100\""),
+                    "rect with attributes should not be modified by empty-rect suppression");
+        }
+    }
+
     // ── utility ───────────────────────────────────────────────────────────
     private static int countOccurrences(String text, String sub) {
         int count = 0;
