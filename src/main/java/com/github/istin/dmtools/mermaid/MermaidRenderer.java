@@ -22,6 +22,10 @@ import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -196,13 +200,19 @@ public class MermaidRenderer {
     }
 
     private String normalizeSvgForBatik(String svg) {
-        return resolveCssVariables(replaceHslColors(svg))
+        String result = resolveCssVariables(replaceHslColors(svg))
                 .replaceFirst("<svg\\b(?![^>]*xmlns:xlink=)", "<svg xmlns:xlink=\"http://www.w3.org/1999/xlink\"")
                 .replaceAll("(?s)<filter\\b[^>]*>.*?</filter>", "")
                 .replaceAll("(?s)@keyframes\\s+[^\\{]+\\{.*?\\}\\s*\\}", "")
                 .replaceAll("animation:[^;\"}]+;?", "")
                 .replaceAll("filter:[^;\"}]+;?", "")
                 .replaceAll("\\sfilter=\"url\\(#[^)]+\\)\"", "")
+        // Batik does not support !important — strip it so CSS cascade order takes effect
+                .replaceAll("\\s*!important", "")
+                // Clean up Mermaid's style="undefined...undefined" artifacts on edge paths.
+                // Batik ignores CSS class rules when an inline style attribute is present,
+                // so malformed/empty style attributes cause paths to render with default fill=black.
+                .replaceAll("\\bstyle=\"[\\s;undefined]*\"", "")
                 .replace("orient=\"auto-start-reverse\"", "orient=\"auto\"")
                 .replace("alignment-baseline=\"central\"", "alignment-baseline=\"middle\"")
                 .replaceAll("<rect([^>]*?)(?<!/) />", "<rect$1></rect>")
@@ -211,11 +221,248 @@ public class MermaidRenderer {
                 .replaceAll("<image\\s+href=", "<image xlink:href=")
                 .replaceAll("(?s)<image\\b(?![^>]*(?:href|xlink:href)=)[^>]*/>", "")
                 .replaceAll("(?s)<image\\b(?![^>]*(?:href|xlink:href)=)[^>]*>.*?</image>", "");
+
+        // Batik CSS cascade is unreliable for duplicate selectors with conflicting properties.
+        // Force correct fill/stroke on <path> and <circle> elements inside <marker> by injecting
+        // presentation attributes. This fixes ER relationship line markers (crow's foot symbols).
+        result = injectMarkerPresentationAttributes(result);
+        // Batik may not apply CSS class rules with compound selectors (#id .class) to edge paths.
+        // Inject fill="none" directly on paths that have relationship/edge classes.
+        result = injectEdgeFillNone(result);
+        // <rect class="background"> has no explicit fill — Batik defaults to black.
+        // SVG 1.1 / Batik does not recognise "transparent"; use "none" instead.
+        result = result.replaceAll(
+                "(\\bclass=\"[^\"]*\\bbackground\\b[^\"]*\")",
+                "$1 fill=\"none\"");
+        // Batik often fails to resolve CSS selectors like `#id .class element` and
+        // `#id .classA.classB`. Inline fill/stroke from CSS rules as presentation attributes.
+        result = inlineCssFillStroke(result);
+        return result;
     }
 
     /**
-     * Resolves CSS custom properties (var(--name)) using values declared in the SVG's own
-     * &lt;style&gt; block. Batik does not support CSS variables, so we inline them before transcoding.
+     * Finds all {@code <marker>} elements in the SVG and adds {@code fill="none"} and
+     * {@code stroke="inherit"} presentation attributes to their {@code <path>} children
+     * (unless the path already has a fill attribute). Batik ignores {@code !important} in CSS
+     * and may apply the wrong fill to marker paths, causing them to render as filled black shapes.
+     */
+    private String injectMarkerPresentationAttributes(String svg) {
+        // Match each <marker>...</marker> block and process its path/circle children
+        Pattern markerPattern = Pattern.compile("(?s)(<marker\\b[^>]*>)(.*?)(</marker>)");
+        Matcher m = markerPattern.matcher(svg);
+        StringBuffer sb = new StringBuffer();
+        while (m.find()) {
+            String open = m.group(1);
+            String body = m.group(2);
+            String close = m.group(3);
+            // Add fill="none" to <path> elements that don't already have a fill attribute
+            body = body.replaceAll("<path(?![^>]*\\bfill=)([^>]*?)(/?>)",
+                    "<path fill=\"none\"$1$2");
+            // Preserve fill="white" on <circle> elements (zero-circle markers), leave others
+            m.appendReplacement(sb, Matcher.quoteReplacement(open + body + close));
+        }
+        m.appendTail(sb);
+        return sb.toString();
+    }
+
+    /**
+     * Adds {@code fill="none"} presentation attribute to SVG {@code <path>} elements
+     * that carry Mermaid edge/relationship CSS classes but have no explicit fill attribute.
+     * Batik may not resolve compound CSS selectors like {@code #id .class} on edge paths,
+     * causing them to render with the default black fill instead of {@code fill:none}.
+     */
+    private String injectEdgeFillNone(String svg) {
+        // Match <path> elements that have an edge-related class and no fill attribute yet
+        return svg.replaceAll(
+                "<path(?=[^>]*\\bclass=\"[^\"]*(?:relationshipLine|edge-thickness|flowchart-link|messageLine)[^\"]*\")(?![^>]*\\bfill=)([^>]*?)(/?>)",
+                "<path fill=\"none\"$1$2");
+    }
+
+    /**
+     * Parses CSS rules from the SVG {@code <style>} block and inlines {@code fill} and
+     * {@code stroke} as presentation attributes on matching SVG elements. This compensates
+     * for Batik's inability to resolve complex CSS selectors ({@code #id .class element},
+     * compound class selectors, etc.).
+     *
+     * <p>The method handles selectors of the form {@code #id .classA element},
+     * {@code #id .classA.classB}, and similar patterns by extracting the required CSS
+     * classes and target element type from the last parts of the selector.</p>
+     */
+    private String inlineCssFillStroke(String svg) {
+        // Extract CSS from <style> block
+        Matcher styleMatcher = Pattern.compile("(?s)<style>(.*?)</style>").matcher(svg);
+        if (!styleMatcher.find()) {
+            return svg;
+        }
+        String css = styleMatcher.group(1);
+
+        // Parse CSS rules: extract selector, fill, stroke
+        List<CssRule> rules = new ArrayList<>();
+        Pattern rulePattern = Pattern.compile("([^{}]+)\\{([^}]+)\\}");
+        Matcher ruleMatcher = rulePattern.matcher(css);
+        while (ruleMatcher.find()) {
+            String selectorGroup = ruleMatcher.group(1).trim();
+            String body = ruleMatcher.group(2).trim();
+
+            String fill = extractCssProp(body, "fill");
+            String stroke = extractCssProp(body, "stroke");
+            if (fill == null && stroke == null) continue;
+
+            // Handle comma-separated selectors
+            for (String sel : selectorGroup.split(",")) {
+                sel = sel.trim();
+                if (sel.isEmpty()) continue;
+                CssRule rule = parseCssSelector(sel, fill, stroke);
+                if (rule != null) {
+                    rules.add(rule);
+                }
+            }
+        }
+        if (rules.isEmpty()) return svg;
+
+        // Process SVG elements: find elements and inject matching fill/stroke
+        // Match opening tags of common SVG elements
+        Pattern elemPattern = Pattern.compile("<(rect|path|circle|ellipse|polygon|line|text|g)\\b([^>]*?)(/?>)");
+        Matcher elemMatcher = elemPattern.matcher(svg);
+        StringBuffer sb = new StringBuffer();
+        while (elemMatcher.find()) {
+            String tagName = elemMatcher.group(1);
+            String attrs = elemMatcher.group(2);
+            String close = elemMatcher.group(3);
+
+            // Extract class list from element
+            Matcher classMatcher = Pattern.compile("\\bclass=\"([^\"]+)\"").matcher(attrs);
+            List<String> classes = new ArrayList<>();
+            if (classMatcher.find()) {
+                for (String c : classMatcher.group(1).split("\\s+")) {
+                    if (!c.isEmpty()) classes.add(c);
+                }
+            }
+
+            // Find all matching rules; last one wins (CSS cascade order)
+            String bestFill = null;
+            String bestStroke = null;
+            for (CssRule rule : rules) {
+                if (rule.matches(tagName, classes)) {
+                    if (rule.fill != null) bestFill = rule.fill;
+                    if (rule.stroke != null) bestStroke = rule.stroke;
+                }
+            }
+
+            // Inject as presentation attributes (only if element doesn't already have them)
+            StringBuilder extra = new StringBuilder();
+            if (bestFill != null && !attrs.contains("fill=")) {
+                extra.append(" fill=\"").append(bestFill).append("\"");
+            }
+            if (bestStroke != null && !attrs.contains("stroke=")) {
+                extra.append(" stroke=\"").append(bestStroke).append("\"");
+            }
+
+            if (extra.length() > 0) {
+                elemMatcher.appendReplacement(sb,
+                        Matcher.quoteReplacement("<" + tagName + attrs + extra + close));
+            }
+        }
+        elemMatcher.appendTail(sb);
+        return sb.toString();
+    }
+
+    private String extractCssProp(String cssBody, String propName) {
+        // Match "fill: value" or "stroke: value" — stop at semicolon, closing brace or end
+        Pattern p = Pattern.compile("(?:^|;)\\s*" + propName + "\\s*:\\s*([^;}{]+?)\\s*(?:;|$)");
+        Matcher m = p.matcher(cssBody);
+        String last = null;
+        while (m.find()) {
+            last = m.group(1).trim();
+        }
+        return last;
+    }
+
+    /**
+     * Parses a single CSS selector and extracts:
+     * - requiredClasses: CSS classes the element must have
+     * - ancestorClasses: CSS classes some ancestor element must have
+     * - targetElement: the element type (rect, path, etc.) or null for class-only selectors
+     */
+    private CssRule parseCssSelector(String selector, String fill, String stroke) {
+        // Strip leading #id part (e.g., "#dmtools-mermaid ")
+        String sel = selector.replaceFirst("^#[\\w-]+\\s+", "");
+        if (sel.startsWith("#")) return null; // pure id selector for a different element
+
+        // Split by whitespace (descendant combinator)
+        String[] parts = sel.trim().split("\\s+");
+        if (parts.length == 0) return null;
+
+        String lastPart = parts[parts.length - 1];
+
+        // Parse the last part: could be "element", ".class", "element.class", ".classA.classB"
+        List<String> requiredClasses = new ArrayList<>();
+        String targetElement = null;
+
+        // Extract element name (before first dot, if any)
+        if (lastPart.contains(".")) {
+            int dotIdx = lastPart.indexOf('.');
+            if (dotIdx > 0) {
+                targetElement = lastPart.substring(0, dotIdx);
+            }
+            // Extract all classes from the last part
+            for (String cls : lastPart.substring(lastPart.indexOf('.')).split("\\.")) {
+                if (!cls.isEmpty()) requiredClasses.add(cls);
+            }
+        } else {
+            targetElement = lastPart;
+        }
+
+        // Extract ancestor class requirements from preceding parts
+        List<String> ancestorClasses = new ArrayList<>();
+        for (int i = 0; i < parts.length - 1; i++) {
+            String part = parts[i];
+            // Extract classes from ancestor selectors
+            if (part.contains(".")) {
+                for (String cls : part.split("\\.")) {
+                    if (!cls.isEmpty() && !cls.startsWith("#")) {
+                        ancestorClasses.add(cls);
+                    }
+                }
+            }
+        }
+
+        return new CssRule(targetElement, requiredClasses, ancestorClasses, fill, stroke);
+    }
+
+    private static class CssRule {
+        final String targetElement; // null = any element
+        final List<String> requiredClasses; // classes the element itself must have
+        final List<String> ancestorClasses; // classes some ancestor must have (not checked — we inline conservatively)
+        final String fill;
+        final String stroke;
+
+        CssRule(String targetElement, List<String> requiredClasses, List<String> ancestorClasses,
+                String fill, String stroke) {
+            this.targetElement = targetElement;
+            this.requiredClasses = requiredClasses;
+            this.ancestorClasses = ancestorClasses;
+            this.fill = fill;
+            this.stroke = stroke;
+        }
+
+        boolean matches(String elemTag, List<String> elemClasses) {
+            // Check element type
+            if (targetElement != null && !targetElement.equals(elemTag)) return false;
+            // Check required classes on the element itself
+            for (String rc : requiredClasses) {
+                if (!elemClasses.contains(rc)) return false;
+            }
+            // We cannot check ancestor classes with regex-based processing,
+            // but most Mermaid diagrams have the ancestor classes present.
+            // Skip ancestor check — this is conservative inlining.
+            return true;
+        }
+    }
+
+    /**
+     * Resolves CSS variables in the SVG &lt;style&gt; block. Batik does not support CSS variables,
+     * so we inline them before transcoding.
      */
     private String resolveCssVariables(String svg) {
         // Extract all --variable: value declarations from the style block
