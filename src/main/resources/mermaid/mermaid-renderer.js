@@ -232028,23 +232028,30 @@ A.method() {
           let x6 = box.x ?? 0;
           let y10 = box.y ?? 0;
           if (tagName19 === "text" || tagName19 === "tspan") {
+            const elementX = Number.parseFloat(this.getAttribute?.("x")) || 0;
             const anchor2 = this.getAttribute?.("text-anchor") || this.closest?.("text")?.getAttribute?.("text-anchor") || "start";
-            if (anchor2 === "middle") x6 = -width3 / 2;
-            else if (anchor2 === "end") x6 = -width3;
+            if (anchor2 === "middle") x6 = elementX - width3 / 2;
+            else if (anchor2 === "end") x6 = elementX - width3;
+            else x6 = elementX;
             const fontSize = 16;
             const ascent = height2 * 0.75;
             let baseline = 0;
             const firstTspan = this.querySelector?.("tspan");
+            const parseVal = (v10) => {
+              if (!v10) return 0;
+              const emMatch = /^(-?[\d.]+)em$/.exec(v10);
+              if (emMatch) return Number.parseFloat(emMatch[1]) * fontSize;
+              return Number.parseFloat(v10) || 0;
+            };
             if (firstTspan) {
               const tspanY = firstTspan.getAttribute?.("y") || "";
               const tspanDy = firstTspan.getAttribute?.("dy") || "";
-              const parseVal = (v10) => {
-                if (!v10) return 0;
-                const emMatch = /^(-?[\d.]+)em$/.exec(v10);
-                if (emMatch) return Number.parseFloat(emMatch[1]) * fontSize;
-                return Number.parseFloat(v10) || 0;
-              };
-              baseline = parseVal(tspanY) + parseVal(tspanDy);
+              if (tspanY) {
+                baseline = parseVal(tspanY) + parseVal(tspanDy);
+              } else {
+                const textY = this.getAttribute?.("y") || "";
+                baseline = parseVal(textY) + parseVal(tspanDy);
+              }
             } else {
               baseline = Number.parseFloat(this.getAttribute?.("y")) || 0;
             }
