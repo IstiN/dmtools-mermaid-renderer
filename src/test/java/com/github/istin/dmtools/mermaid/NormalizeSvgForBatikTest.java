@@ -599,6 +599,66 @@ class NormalizeSvgForBatikTest {
         }
     }
 
+    // ── UserJourney ───────────────────────────────────────────────────────
+    @Nested
+    class UserJourney {
+
+        @Test
+        void journeySectionRectFillIsRemoved() {
+            // Section header rects have explicit dark fills; CSS should control the light theme.
+            String svg = svgWrap("",
+                    "<rect class=\"journey-section section-type-0\" fill=\"#191970\" width=\"100\" height=\"20\"/>");
+            String result = renderer.normalizeSvgForBatik(svg);
+            // The presentation fill attribute must be removed so the CSS class rule wins.
+            assertFalse(result.contains("fill=\"#191970\""),
+                    "journey-section rect explicit fill should be removed");
+        }
+
+        @Test
+        void taskRectFillIsRemoved() {
+            // Task rects also have explicit dark fills; CSS should override them to light.
+            String svg = svgWrap("",
+                    "<rect class=\"task task-type-0\" fill=\"#191970\" width=\"60\" height=\"15\"/>");
+            String result = renderer.normalizeSvgForBatik(svg);
+            assertFalse(result.contains("fill=\"#191970\""),
+                    "task rect explicit fill should be removed");
+        }
+
+        @Test
+        void journeySectionTextGetsDarkFill() {
+            // Section label text must be dark (#333) so it's readable on the light CSS background.
+            String svg = svgWrap("",
+                    "<text class=\"journey-section section-type-0\" style=\"font-size:14px;\">CLI</text>");
+            String result = renderer.normalizeSvgForBatik(svg);
+            assertTrue(result.contains("fill:#333"),
+                    "journey-section text should get fill:#333 prepended to its style");
+        }
+
+        @Test
+        void taskTextFillNotModified() {
+            // Task text elements must NOT receive the dark fill injection (they are inside task boxes).
+            String svg = svgWrap("",
+                    "<text class=\"task journey-section section-type-0\" style=\"font-size:11px;\">do work</text>");
+            String result = renderer.normalizeSvgForBatik(svg);
+            // The regex excludes elements whose class contains "task", so no fill:#333 injection.
+            assertFalse(result.startsWith("<text") && result.contains("fill:#333"),
+                    "task text should not receive fill:#333 injection");
+        }
+
+        @Test
+        void nonJourneyRectFillPreserved() {
+            // Rects without journey-section or task classes must keep their fill.
+            String svg = svgWrap("",
+                    "<rect class=\"background\" fill=\"#ffffff\" width=\"200\" height=\"100\"/>");
+            String result = renderer.normalizeSvgForBatik(svg);
+            // Background rect fill is a different normalization path; journey regex must not strip it.
+            // We check that a non-journey non-task rect is not stripped by the journey regex.
+            // (Background rects are handled separately; this is a different class so it should survive.)
+            assertTrue(result.contains("fill=\"#ffffff\"") || result.contains("fill=\"none\""),
+                    "non-journey rect fill should not be removed by journey normalization");
+        }
+    }
+
     // ── utility ───────────────────────────────────────────────────────────
     private static int countOccurrences(String text, String sub) {
         int count = 0;

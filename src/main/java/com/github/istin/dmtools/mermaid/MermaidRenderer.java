@@ -238,6 +238,23 @@ public class MermaidRenderer {
                 .replaceAll("<switch>\\s*", "")
                 .replaceAll("\\s*</switch>", "");
 
+        // User-journey section/task rects (class="journey-section"/"task task-type-N") have
+        // explicit dark fill colors set by Mermaid JS as presentation attributes. In browsers,
+        // CSS class rules correctly override these to light theme colors (e.g., #ECECFF), and
+        // foreignObject HTML provides the visual section header content. After foreignObject
+        // removal we need CSS to set the light background. Remove the explicit fills so our
+        // CSS inliner (and Batik's own CSS engine) can apply the correct theme colors.
+        result = result.replaceAll(
+                "(<rect(?=[^>]*\\bclass=\"[^\"]*(?:journey-section|\\btask\\b)[^\"]*\")[^>]*?)\\bfill=\"#[0-9a-fA-F]+\"([^>]*/?>)",
+                "$1$2");
+        // The journey-section SVG text fallback (exposed after foreignObject removal) needs
+        // a dark fill to remain readable on the light theme-color section background.
+        // CSS class rules give it the same light fill as the background rect (invisible).
+        // Add fill:#333 to the inline style for section label text elements specifically.
+        result = result.replaceAll(
+                "(<text(?=[^>]*\\bclass=\"[^\"]*\\bjourney-section\\b)(?![^>]*\\btask\\b)[^>]*?)\\bstyle=\"",
+                "$1 style=\"fill:#333;");
+
         // Batik CSS cascade is unreliable for duplicate selectors with conflicting properties.
         // Force correct fill/stroke on <path> and <circle> elements inside <marker> by injecting
         // presentation attributes. This fixes ER relationship line markers (crow's foot symbols).

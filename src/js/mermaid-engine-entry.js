@@ -283,12 +283,16 @@ function normalizeSvgOutput(svgText) {
       const [vbX, vbY, vbW, vbH] = vals;
       let minX = vbX, minY = vbY, maxX = vbX + vbW, maxY = vbY + vbH;
       if (contentBounds) {
-        const padding = 10;
+        const sidePadding = 10;
+        // Use extra top padding (25px) so diagram titles with large CSS fonts
+        // (e.g. venn .venn-title at 32px, quadrant title) are not clipped at the
+        // top edge when dominant-baseline="middle"/"hanging" shifts the text upward.
+        const topPadding = 25;
         // Only expand the viewBox — never shrink it (estimateSvgExtents may underestimate).
-        minX = Math.min(minX, contentBounds.minX - padding);
-        minY = Math.min(minY, contentBounds.minY - padding);
-        maxX = Math.max(maxX, contentBounds.maxX + padding);
-        maxY = Math.max(maxY, contentBounds.maxY + padding);
+        minX = Math.min(minX, contentBounds.minX - sidePadding);
+        minY = Math.min(minY, contentBounds.minY - topPadding);
+        maxX = Math.max(maxX, contentBounds.maxX + sidePadding);
+        maxY = Math.max(maxY, contentBounds.maxY + sidePadding);
       }
       const w = maxX - minX;
       const h = maxY - minY;
