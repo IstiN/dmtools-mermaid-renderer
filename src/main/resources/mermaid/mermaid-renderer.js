@@ -231754,6 +231754,8 @@ A.method() {
           return null;
         }
         return {
+          x: bounds4.minX,
+          y: bounds4.minY,
           minX: bounds4.minX,
           minY: bounds4.minY,
           maxX: bounds4.maxX,
@@ -231763,30 +231765,39 @@ A.method() {
         };
       }
       function normalizeSvgOutput(svgText) {
+        const { document: document2 } = parseHTML(svgText);
+        const svg2 = document2.querySelector("svg");
+        const contentBounds = svg2 ? estimateSvgExtents(svg2) : null;
         const viewBoxMatch = /viewBox="([^"]+)"/.exec(svgText);
         if (viewBoxMatch) {
           const vals = viewBoxMatch[1].trim().split(/\s+/).map(Number);
           if (vals.length === 4 && vals.every(Number.isFinite) && vals[2] > 0 && vals[3] > 0) {
-            const [, , w11] = vals;
+            const [vbX, vbY, vbW, vbH] = vals;
+            let minX2 = vbX, minY2 = vbY, maxX = vbX + vbW, maxY = vbY + vbH;
+            if (contentBounds) {
+              const padding3 = 10;
+              minX2 = Math.min(minX2, contentBounds.minX - padding3);
+              minY2 = Math.min(minY2, contentBounds.minY - padding3);
+              maxX = Math.max(maxX, contentBounds.maxX + padding3);
+              maxY = Math.max(maxY, contentBounds.maxY + padding3);
+            }
+            const w11 = maxX - minX2;
+            const h10 = maxY - minY2;
+            const nextViewBox2 = `viewBox="${minX2} ${minY2} ${w11} ${h10}"`;
             const nextStyle2 = `style="max-width: ${w11}px;"`;
-            const svgWithStyle = /<svg\b[^>]*\sstyle="[^"]*"/.test(svgText) ? svgText.replace(/(<svg\b[^>]*?)\sstyle="[^"]*"/, `$1 ${nextStyle2}`) : svgText.replace("<svg ", `<svg ${nextStyle2} `);
-            return svgWithStyle;
+            let normalized2 = svgText.replace(/viewBox="[^"]+"/, nextViewBox2);
+            normalized2 = /<svg\b[^>]*\sstyle="[^"]*"/.test(normalized2) ? normalized2.replace(/(<svg\b[^>]*?)\sstyle="[^"]*"/, `$1 ${nextStyle2}`) : normalized2.replace("<svg ", `<svg ${nextStyle2} `);
+            return normalized2;
           }
         }
-        const { document: document2 } = parseHTML(svgText);
-        const svg2 = document2.querySelector("svg");
-        if (!svg2) {
-          return svgText;
-        }
-        const bounds4 = estimateSvgExtents(svg2);
-        if (!bounds4) {
+        if (!svg2 || !contentBounds) {
           return svgText;
         }
         const padding2 = 10;
-        const minX = bounds4.minX - padding2;
-        const minY = bounds4.minY - padding2;
-        const width3 = Math.max(10, bounds4.width + padding2 * 2);
-        const height2 = Math.max(10, bounds4.height + padding2 * 2);
+        const minX = contentBounds.minX - padding2;
+        const minY = contentBounds.minY - padding2;
+        const width3 = Math.max(10, contentBounds.width + padding2 * 2);
+        const height2 = Math.max(10, contentBounds.height + padding2 * 2);
         const nextViewBox = `viewBox="${minX} ${minY} ${width3} ${height2}"`;
         const nextStyle = `style="max-width: ${width3}px;"`;
         let normalized = viewBoxMatch ? svgText.replace(/viewBox="[^"]+"/, nextViewBox) : svgText.replace("<svg ", `<svg ${nextViewBox} `);
@@ -231851,6 +231862,7 @@ A.method() {
           for (const child of element3.children || []) {
             const ct = String(child.tagName || "").toLowerCase();
             if (skip.has(ct)) continue;
+            if (typeof child.getBBox !== "function") continue;
             const box = child.getBBox();
             if (box.width === 0 && box.height === 0) continue;
             const { tx: tx2, ty } = parseTranslate(child);
@@ -232011,9 +232023,10 @@ A.method() {
               return this;
             } };
           }
-          const { width: width3, height: height2 } = realBox(this);
-          let x6 = 0;
-          let y10 = 0;
+          const box = realBox(this);
+          const { width: width3, height: height2 } = box;
+          let x6 = box.x ?? 0;
+          let y10 = box.y ?? 0;
           if (tagName19 === "text" || tagName19 === "tspan") {
             const anchor2 = this.getAttribute?.("text-anchor") || this.closest?.("text")?.getAttribute?.("text-anchor") || "start";
             if (anchor2 === "middle") x6 = -width3 / 2;

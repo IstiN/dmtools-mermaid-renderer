@@ -239,6 +239,8 @@ function estimateSvgExtents(element) {
     return null;
   }
   return {
+    x: bounds.minX,
+    y: bounds.minY,
     minX: bounds.minX,
     minY: bounds.minY,
     maxX: bounds.maxX,
@@ -249,35 +251,48 @@ function estimateSvgExtents(element) {
 }
 
 function normalizeSvgOutput(svgText) {
-  // Prefer Mermaid's own viewBox — only recompute if missing or zero-sized.
+  // Parse the SVG to compute actual content bounds as a safety net.
+  // This ensures content that falls outside Mermaid's computed viewBox (e.g.
+  // kanban sections at y=-300, git branch labels at x<0) is not clipped.
+  const { document } = parseHTML(svgText);
+  const svg = document.querySelector('svg');
+  const contentBounds = svg ? estimateSvgExtents(svg) : null;
+
   const viewBoxMatch = /viewBox="([^"]+)"/.exec(svgText);
   if (viewBoxMatch) {
     const vals = viewBoxMatch[1].trim().split(/\s+/).map(Number);
     if (vals.length === 4 && vals.every(Number.isFinite) && vals[2] > 0 && vals[3] > 0) {
-      // Mermaid provided a valid viewBox — keep it, just update max-width style.
-      const [, , w] = vals;
+      // Mermaid provided a valid viewBox. Expand it if content extends outside.
+      const [vbX, vbY, vbW, vbH] = vals;
+      let minX = vbX, minY = vbY, maxX = vbX + vbW, maxY = vbY + vbH;
+      if (contentBounds) {
+        const padding = 10;
+        // Only expand the viewBox — never shrink it (estimateSvgExtents may underestimate).
+        minX = Math.min(minX, contentBounds.minX - padding);
+        minY = Math.min(minY, contentBounds.minY - padding);
+        maxX = Math.max(maxX, contentBounds.maxX + padding);
+        maxY = Math.max(maxY, contentBounds.maxY + padding);
+      }
+      const w = maxX - minX;
+      const h = maxY - minY;
+      const nextViewBox = `viewBox="${minX} ${minY} ${w} ${h}"`;
       const nextStyle = `style="max-width: ${w}px;"`;
-      const svgWithStyle = /<svg\b[^>]*\sstyle="[^"]*"/.test(svgText)
-        ? svgText.replace(/(<svg\b[^>]*?)\sstyle="[^"]*"/, `$1 ${nextStyle}`)
-        : svgText.replace('<svg ', `<svg ${nextStyle} `);
-      return svgWithStyle;
+      let normalized = svgText.replace(/viewBox="[^"]+"/, nextViewBox);
+      normalized = /<svg\b[^>]*\sstyle="[^"]*"/.test(normalized)
+        ? normalized.replace(/(<svg\b[^>]*?)\sstyle="[^"]*"/, `$1 ${nextStyle}`)
+        : normalized.replace('<svg ', `<svg ${nextStyle} `);
+      return normalized;
     }
   }
-  // Fallback: compute viewBox from element positions.
-  const { document } = parseHTML(svgText);
-  const svg = document.querySelector('svg');
-  if (!svg) {
-    return svgText;
-  }
-  const bounds = estimateSvgExtents(svg);
-  if (!bounds) {
+  // Fallback: compute viewBox entirely from element positions.
+  if (!svg || !contentBounds) {
     return svgText;
   }
   const padding = 10;
-  const minX = bounds.minX - padding;
-  const minY = bounds.minY - padding;
-  const width = Math.max(10, bounds.width + padding * 2);
-  const height = Math.max(10, bounds.height + padding * 2);
+  const minX = contentBounds.minX - padding;
+  const minY = contentBounds.minY - padding;
+  const width = Math.max(10, contentBounds.width + padding * 2);
+  const height = Math.max(10, contentBounds.height + padding * 2);
   const nextViewBox = `viewBox="${minX} ${minY} ${width} ${height}"`;
   const nextStyle = `style="max-width: ${width}px;"`;
   let normalized = viewBoxMatch
@@ -356,6 +371,7 @@ function patchSvgMetrics(window, javaMetrics) {
     for (const child of element.children || []) {
       const ct = String(child.tagName || '').toLowerCase();
       if (skip.has(ct)) continue;
+      if (typeof child.getBBox !== 'function') continue;
       const box = child.getBBox();
       if (box.width === 0 && box.height === 0) continue;
       const { tx, ty } = parseTranslate(child);
@@ -509,9 +525,12 @@ function patchSvgMetrics(window, javaMetrics) {
     }
 
     // Text elements: use AWT text measurement with proper positioning.
-    const { width, height } = realBox(this);
-    let x = 0;
-    let y = 0;
+    const box = realBox(this);
+    const { width, height } = box;
+    // For svg/root elements, realBox returns estimateSvgExtents which includes x/y.
+    // Use those as defaults so setupGraphViewbox gets the correct bounding origin.
+    let x = box.x ?? 0;
+    let y = box.y ?? 0;
 
     if (tagName === 'text' || tagName === 'tspan') {
       // Account for text-anchor: middle/end shift the bbox left.
