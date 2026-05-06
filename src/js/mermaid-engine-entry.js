@@ -24,6 +24,7 @@ function estimateTextWidth(element) {
     return 0;
   }
   const text = visibleText(element);
+  if (!text) return 0;
   const fontSize = parseFontSize(element);
   return Math.max(10, text.length * fontSize * 0.58);
 }
@@ -424,6 +425,8 @@ function patchSvgMetrics(window, javaMetrics) {
     const text = visibleText(element);
     const fontSize = parseFontSize(element);
     const fontFamily = parseFontFamily(element);
+    // Empty text → zero width (don't fall back to min-width estimate)
+    if (!text) return { width: 0, height: Number(javaMetrics.measureHeight(fontSize, fontFamily)) || 16 };
     try {
       const w = Number(javaMetrics.measureWidth(text, fontSize, fontFamily)) || estimateTextWidth(element);
       const h = Number(javaMetrics.measureHeight(fontSize, fontFamily)) * Math.max(1, estimateLineCount(element, text));

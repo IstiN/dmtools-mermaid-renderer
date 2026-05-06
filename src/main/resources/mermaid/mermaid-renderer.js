@@ -231540,6 +231540,7 @@ A.method() {
           return 0;
         }
         const text4 = visibleText(element3);
+        if (!text4) return 0;
         const fontSize = parseFontSize2(element3);
         return Math.max(10, text4.length * fontSize * 0.58);
       }
@@ -231903,6 +231904,7 @@ A.method() {
           const text4 = visibleText(element3);
           const fontSize = parseFontSize2(element3);
           const fontFamily = parseFontFamily(element3);
+          if (!text4) return { width: 0, height: Number(javaMetrics.measureHeight(fontSize, fontFamily)) || 16 };
           try {
             const w11 = Number(javaMetrics.measureWidth(text4, fontSize, fontFamily)) || estimateTextWidth(element3);
             const h10 = Number(javaMetrics.measureHeight(fontSize, fontFamily)) * Math.max(1, estimateLineCount(element3, text4));
