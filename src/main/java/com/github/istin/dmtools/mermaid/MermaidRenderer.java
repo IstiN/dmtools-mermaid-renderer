@@ -199,7 +199,7 @@ public class MermaidRenderer {
         }
     }
 
-    private String normalizeSvgForBatik(String svg) {
+    String normalizeSvgForBatik(String svg) {
         String result = resolveCssVariables(replaceHslColors(svg))
                 .replaceFirst("<svg\\b(?![^>]*xmlns:xlink=)", "<svg xmlns:xlink=\"http://www.w3.org/1999/xlink\"")
                 .replaceAll("(?s)<filter\\b[^>]*>.*?</filter>", "")
@@ -246,7 +246,7 @@ public class MermaidRenderer {
      * (unless the path already has a fill attribute). Batik ignores {@code !important} in CSS
      * and may apply the wrong fill to marker paths, causing them to render as filled black shapes.
      */
-    private String injectMarkerPresentationAttributes(String svg) {
+    String injectMarkerPresentationAttributes(String svg) {
         // Match each <marker>...</marker> block and process its path/circle children
         Pattern markerPattern = Pattern.compile("(?s)(<marker\\b[^>]*>)(.*?)(</marker>)");
         Matcher m = markerPattern.matcher(svg);
@@ -271,7 +271,7 @@ public class MermaidRenderer {
      * Batik may not resolve compound CSS selectors like {@code #id .class} on edge paths,
      * causing them to render with the default black fill instead of {@code fill:none}.
      */
-    private String injectEdgeFillNone(String svg) {
+    String injectEdgeFillNone(String svg) {
         // Match <path> elements that have an edge-related class and no fill attribute yet
         return svg.replaceAll(
                 "<path(?=[^>]*\\bclass=\"[^\"]*(?:relationshipLine|edge-thickness|flowchart-link|messageLine)[^\"]*\")(?![^>]*\\bfill=)([^>]*?)(/?>)",
@@ -288,7 +288,7 @@ public class MermaidRenderer {
      * {@code #id .classA.classB}, and similar patterns by extracting the required CSS
      * classes and target element type from the last parts of the selector.</p>
      */
-    private String inlineCssFillStroke(String svg) {
+    String inlineCssFillStroke(String svg) {
         // Extract CSS from <style> block
         Matcher styleMatcher = Pattern.compile("(?s)<style>(.*?)</style>").matcher(svg);
         if (!styleMatcher.find()) {
@@ -464,7 +464,7 @@ public class MermaidRenderer {
      * Resolves CSS variables in the SVG &lt;style&gt; block. Batik does not support CSS variables,
      * so we inline them before transcoding.
      */
-    private String resolveCssVariables(String svg) {
+    String resolveCssVariables(String svg) {
         // Extract all --variable: value declarations from the style block
         java.util.Map<String, String> vars = new java.util.LinkedHashMap<>();
         Pattern declPattern = Pattern.compile("--([\\w-]+)\\s*:\\s*([^;}{]+?)\\s*(?:;|})");
@@ -503,7 +503,7 @@ public class MermaidRenderer {
         return result.toString();
     }
 
-    private String replaceHslColors(String svg) {
+    String replaceHslColors(String svg) {
         Pattern pattern = Pattern.compile("hsl\\(\\s*([\\d.]+)\\s*,\\s*([\\d.]+)%\\s*,\\s*([\\d.]+)%\\s*\\)");
         Matcher matcher = pattern.matcher(svg);
         StringBuffer result = new StringBuffer();
