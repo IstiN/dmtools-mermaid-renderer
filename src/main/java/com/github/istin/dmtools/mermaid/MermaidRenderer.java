@@ -212,6 +212,11 @@ public class MermaidRenderer {
         // which would make them render as tiny coloured dots in Batik.
         svg = svg.replace("<rect/>", "<rect fill=\"none\" stroke=\"none\"/>")
                  .replace("<rect />", "<rect fill=\"none\" stroke=\"none\"/>");
+        // Wrap long text in <switch> elements BEFORE foreignObject is removed.
+        // Mermaid user-journey uses <foreignObject> for HTML word-wrap and a plain
+        // <text> as fallback. After foreignObject removal Batik renders the single-line
+        // fallback — this splits long tspans to match the HTML line-breaking.
+        svg = wrapSvgSwitchTexts(svg);
         String result = resolveCssVariables(replaceRgbaColors(replaceHslColors(svg)))
                 .replaceFirst("<svg\\b(?![^>]*xmlns:xlink=)", "<svg xmlns:xlink=\"http://www.w3.org/1999/xlink\"")
                 .replaceAll("(?s)<filter\\b[^>]*>.*?</filter>", "")
@@ -334,6 +339,147 @@ public class MermaidRenderer {
         }
         gm.appendTail(sb);
         return sb.toString();
+    }
+
+    /**
+     * Wraps long text in {@code <switch>} fallback {@code <text>} elements to match the
+     * HTML word-wrap that browsers apply to the {@code <foreignObject>} sibling.
+     * <p>
+     * Mermaid user-journey diagrams use {@code <switch>} with two alternatives:
+     * <ol>
+     *   <li>A {@code <foreignObject>} containing an HTML {@code <div>} — browsers render
+     *       this and the text wraps naturally to the container width.</li>
+     *   <li>An SVG {@code <text>} fallback — used by renderers that don't support
+     *       {@code <foreignObject>}. Mermaid puts all text in a single {@code <tspan>},
+     *       so in Batik it renders as one long line that overflows the box.</li>
+     * </ol>
+     * This method reads the foreignObject's {@code width} to determine the box width,
+     * estimates how many characters fit per line (using {@code font-size × 0.55px/char}),
+     * splits the text at word boundaries, and replaces the single tspan with multiple
+     * tspans — adjusting the parent {@code <text>} y-coordinate so the block is
+     * vertically centred in the box (same as the HTML {@code display:table-cell} layout).
+     */
+    String wrapSvgSwitchTexts(String svg) {
+        try {
+            javax.xml.parsers.DocumentBuilderFactory factory =
+                    javax.xml.parsers.DocumentBuilderFactory.newInstance();
+            factory.setNamespaceAware(true);
+            factory.setFeature("http://apache.org/xml/features/nonvalidating/load-external-dtd", false);
+            factory.setFeature("http://xml.org/sax/features/external-general-entities", false);
+            factory.setFeature("http://xml.org/sax/features/external-parameter-entities", false);
+            javax.xml.parsers.DocumentBuilder builder = factory.newDocumentBuilder();
+            org.w3c.dom.Document doc = builder.parse(
+                    new org.xml.sax.InputSource(new java.io.StringReader(svg)));
+
+            org.w3c.dom.NodeList switchNodes = doc.getElementsByTagName("switch");
+            boolean changed = false;
+
+            for (int i = 0; i < switchNodes.getLength(); i++) {
+                org.w3c.dom.Element switchEl = (org.w3c.dom.Element) switchNodes.item(i);
+
+                // Walk direct children to find foreignObject and text
+                org.w3c.dom.Element foEl = null;
+                org.w3c.dom.Element textEl = null;
+                org.w3c.dom.NodeList children = switchEl.getChildNodes();
+                for (int j = 0; j < children.getLength(); j++) {
+                    org.w3c.dom.Node n = children.item(j);
+                    if (n.getNodeType() != org.w3c.dom.Node.ELEMENT_NODE) continue;
+                    String local = n.getLocalName();
+                    if ("foreignObject".equals(local)) foEl = (org.w3c.dom.Element) n;
+                    else if ("text".equals(local)) textEl = (org.w3c.dom.Element) n;
+                }
+                if (foEl == null || textEl == null) continue;
+
+                // Box dimensions from the foreignObject
+                float boxWidth, boxHeight, boxY;
+                try {
+                    boxWidth  = Float.parseFloat(foEl.getAttribute("width"));
+                    boxHeight = Float.parseFloat(foEl.getAttribute("height"));
+                    boxY      = Float.parseFloat(foEl.getAttribute("y"));
+                } catch (NumberFormatException e) {
+                    continue;
+                }
+
+                // Find the single existing tspan
+                org.w3c.dom.NodeList tspans = textEl.getElementsByTagName("tspan");
+                if (tspans.getLength() != 1) continue;
+                org.w3c.dom.Element tspan = (org.w3c.dom.Element) tspans.item(0);
+                String content = tspan.getTextContent().trim();
+                if (content.isEmpty()) continue;
+
+                // Determine font-size from inline style or attribute (default 14)
+                float fontSize = 14f;
+                String style = textEl.getAttribute("style");
+                java.util.regex.Matcher fm =
+                        java.util.regex.Pattern.compile("font-size:\\s*(\\d+(?:\\.\\d+)?)").matcher(style);
+                if (fm.find()) {
+                    try { fontSize = Float.parseFloat(fm.group(1)); } catch (NumberFormatException e) { /* keep default */ }
+                }
+                String fsAttr = textEl.getAttribute("font-size");
+                if (!fsAttr.isEmpty()) {
+                    try { fontSize = Float.parseFloat(fsAttr); } catch (NumberFormatException e) { /* keep default */ }
+                }
+
+                // Check whether text fits — avg char width ≈ 0.50 × font-size
+                // Open Sans 14px renders narrower than a generic 0.55 estimate; using 0.50
+                // keeps "Writes Mermaid text" (19 chars) on one line while wrapping
+                // "Runs dmtools mermaid_to_png" (27 chars) which is the correct Playwright behaviour.
+                float avgCharWidth = fontSize * 0.50f;
+                float effectiveWidth = boxWidth - 10; // 5px margin each side
+                int charsPerLine = Math.max(5, (int) (effectiveWidth / avgCharWidth));
+                if (content.length() <= charsPerLine) continue; // fits on one line
+
+                // Word-wrap
+                String[] words = content.split("\\s+");
+                java.util.List<String> lines = new java.util.ArrayList<>();
+                StringBuilder cur = new StringBuilder();
+                for (String word : words) {
+                    if (cur.length() == 0) {
+                        cur.append(word);
+                    } else if (cur.length() + 1 + word.length() <= charsPerLine) {
+                        cur.append(' ').append(word);
+                    } else {
+                        lines.add(cur.toString());
+                        cur = new StringBuilder(word);
+                    }
+                }
+                if (cur.length() > 0) lines.add(cur.toString());
+                if (lines.size() <= 1) continue;
+
+                // Compute first-line y so the block is vertically centred in the box
+                float boxCenterY = boxY + boxHeight / 2f;
+                float lineHeight = fontSize * 1.15f;
+                float firstLineY = boxCenterY - (lines.size() - 1) * lineHeight / 2f;
+
+                String xAttr = tspan.getAttribute("x");
+
+                // Replace content of text element with wrapped tspans
+                textEl.setAttribute("y", String.format("%.1f", firstLineY));
+                while (textEl.hasChildNodes()) textEl.removeChild(textEl.getFirstChild());
+
+                for (int j = 0; j < lines.size(); j++) {
+                    org.w3c.dom.Element newSpan = doc.createElement("tspan");
+                    newSpan.setAttribute("x", xAttr);
+                    newSpan.setAttribute("dy", j == 0 ? "0" : String.format("%.1f", lineHeight));
+                    newSpan.setTextContent(lines.get(j));
+                    textEl.appendChild(newSpan);
+                }
+                changed = true;
+            }
+
+            if (!changed) return svg;
+
+            javax.xml.transform.TransformerFactory tf =
+                    javax.xml.transform.TransformerFactory.newInstance();
+            javax.xml.transform.Transformer transformer = tf.newTransformer();
+            transformer.setOutputProperty(javax.xml.transform.OutputKeys.OMIT_XML_DECLARATION, "yes");
+            java.io.StringWriter sw = new java.io.StringWriter();
+            transformer.transform(new javax.xml.transform.dom.DOMSource(doc),
+                    new javax.xml.transform.stream.StreamResult(sw));
+            return sw.toString();
+        } catch (Exception e) {
+            return svg; // fail-safe: return original on any parse error
+        }
     }
 
     /**

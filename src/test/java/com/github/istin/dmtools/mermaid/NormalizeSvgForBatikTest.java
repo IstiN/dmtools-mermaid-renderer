@@ -769,4 +769,67 @@ class NormalizeSvgForBatikTest {
             assertFalse(result.contains("dominant-baseline=\"auto\""), "Should not add auto baseline");
         }
     }
+
+    @Nested
+    class SwitchTextWrapping {
+        private String makeSwitchSvg(String text, int boxWidth) {
+            return "<svg><switch>"
+                    + "<foreignObject position=\"fixed\" height=\"50\" width=\"" + boxWidth + "\" y=\"110\" x=\"350\">"
+                    + "<div xmlns=\"http://www.w3.org/1999/xhtml\" class=\"task\" "
+                    + "style=\"display:table;height:100%;width:100%\">"
+                    + "<div style=\"display:table-cell;text-align:center\" class=\"label\">" + text + "</div>"
+                    + "</div></foreignObject>"
+                    + "<text class=\"task\" dominant-baseline=\"central\" "
+                    + "style=\"font-size:14;\" y=\"135\" x=\"425\">"
+                    + "<tspan dy=\"0\" x=\"425\">" + text + "</tspan>"
+                    + "</text></switch></svg>";
+        }
+
+        @Test
+        void wrapsLongTextToMultipleLines() {
+            // "Runs dmtools mermaid_to_png" (27 chars) should wrap at box width 150px
+            String svg = makeSwitchSvg("Runs dmtools mermaid_to_png", 150);
+            String result = renderer.wrapSvgSwitchTexts(svg);
+            // Should now have 2+ tspans
+            long tspanCount = result.chars().filter(c -> c == '<').mapToObj(c -> result)
+                    .limit(1).findFirst().map(s -> {
+                        int cnt = 0; int idx = 0;
+                        while ((idx = s.indexOf("<tspan", idx)) != -1) { cnt++; idx++; }
+                        return cnt;
+                    }).orElse(0);
+            assertTrue(result.contains("mermaid_to_png"), "Should still contain text content");
+            // First tspan should be "Runs dmtools", second "mermaid_to_png"
+            assertTrue(result.contains(">Runs dmtools<"), "First line should be 'Runs dmtools'");
+            assertTrue(result.contains(">mermaid_to_png<"), "Second line should be 'mermaid_to_png'");
+        }
+
+        @Test
+        void doesNotWrapShortText() {
+            // "Generates SVG" (13 chars) fits in 150px
+            String svg = makeSwitchSvg("Generates SVG", 150);
+            String result = renderer.wrapSvgSwitchTexts(svg);
+            // Should have only one tspan with all text on one line
+            int tspanCount = 0; int idx = 0;
+            while ((idx = result.indexOf("<tspan", idx)) != -1) { tspanCount++; idx++; }
+            assertEquals(1, tspanCount, "Short text should not be wrapped");
+        }
+
+        @Test
+        void adjustsYForVerticalCentering() {
+            // With 2 lines in a 50px-high box, y should be adjusted from center
+            String svg = makeSwitchSvg("Runs dmtools mermaid_to_png", 150);
+            String result = renderer.wrapSvgSwitchTexts(svg);
+            // y="135" is center (box y=110, height=50). 2 lines → first line above center
+            assertFalse(result.contains("y=\"135\""),
+                    "y should be adjusted from center (135) for multi-line centering");
+        }
+
+        @Test
+        void noSwitchElementPassesThrough() {
+            String svg = "<svg><text><tspan>Hello</tspan></text></svg>";
+            String result = renderer.wrapSvgSwitchTexts(svg);
+            // No change expected (no switch elements)
+            assertTrue(result.contains("Hello"), "Content should be preserved");
+        }
+    }
 }
