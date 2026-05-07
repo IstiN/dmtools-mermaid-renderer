@@ -724,4 +724,49 @@ class NormalizeSvgForBatikTest {
         }
         return count;
     }
+
+    @Nested
+    class HangingDominantBaseline {
+        @Test
+        void fixesHangingBaselineWithFontSize20() {
+            String svg = "<svg><g class=\"title\"><text transform=\"translate(250, 10) rotate(0)\" "
+                    + "dominant-baseline=\"hanging\" font-size=\"20\">Title</text></g></svg>";
+            String result = renderer.fixHangingDominantBaseline(svg);
+            assertTrue(result.contains("dy=\"16.0\""), "Expected dy=16.0 in: " + result);
+            assertTrue(result.contains("dominant-baseline=\"auto\""), "Expected auto baseline");
+            assertFalse(result.contains("dominant-baseline=\"hanging\""), "Should not contain hanging");
+        }
+
+        @Test
+        void fixesHangingBaselineWithFontSize16() {
+            String svg = "<svg><text dominant-baseline=\"hanging\" font-size=\"16\">Label</text></svg>";
+            String result = renderer.fixHangingDominantBaseline(svg);
+            assertTrue(result.contains("dy=\"12.8\""), "Expected dy=12.8 in: " + result);
+            assertTrue(result.contains("dominant-baseline=\"auto\""), "Expected auto baseline");
+        }
+
+        @Test
+        void skipsRotatedText() {
+            // Axis labels with rotate(-90) should not be modified
+            String svg = "<svg><text transform=\"translate(5, 363) rotate(-90)\" "
+                    + "dominant-baseline=\"hanging\" font-size=\"16\">Low quality</text></svg>";
+            String result = renderer.fixHangingDominantBaseline(svg);
+            assertTrue(result.contains("dominant-baseline=\"hanging\""), "Rotated text should be unchanged");
+            assertFalse(result.contains("dy="), "Should not add dy to rotated text");
+        }
+
+        @Test
+        void skipsNonHangingBaseline() {
+            String svg = "<svg><text dominant-baseline=\"middle\" font-size=\"16\">Venn</text></svg>";
+            String result = renderer.fixHangingDominantBaseline(svg);
+            assertTrue(result.contains("dominant-baseline=\"middle\""), "Should keep middle baseline");
+        }
+
+        @Test
+        void noChangeWhenNoHangingElements() {
+            String svg = "<svg><text font-size=\"16\">Normal</text></svg>";
+            String result = renderer.fixHangingDominantBaseline(svg);
+            assertFalse(result.contains("dominant-baseline=\"auto\""), "Should not add auto baseline");
+        }
+    }
 }

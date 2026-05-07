@@ -285,10 +285,30 @@ function normalizeSvgOutput(svgText) {
       if (contentBounds) {
         const sidePadding = 10;
         const bottomPadding = 20;
-        // Use extra top padding (25px) so diagram titles with large CSS fonts
-        // (e.g. venn .venn-title at 32px, quadrant title) are not clipped at the
-        // top edge when dominant-baseline="middle"/"hanging" shifts the text upward.
-        const topPadding = 25;
+        // Compute top padding adaptively: text with dominant-baseline="middle" or
+        // "central" has its CENTER at y, so the top of the text is at y - fontSize/2
+        // and can extend ABOVE contentBounds.minY. "hanging" baseline text hangs BELOW
+        // its y coordinate so no extra space is needed above it (8px visual margin
+        // is sufficient). Use 25px for "middle"/"central" to handle large CSS fonts
+        // (e.g. venn .venn-title at 32px) that override the attribute font-size.
+        let topPadding = 8; // default: small margin for "hanging" / normal baseline
+        if (svg) {
+          const allTexts = svg.querySelectorAll('text');
+          for (const t of allTexts) {
+            const baseline = t.getAttribute('dominant-baseline') || 'auto';
+            if (baseline === 'middle' || baseline === 'central') {
+              // Compute global y of this text element
+              const localY = parseFloat(t.getAttribute('y') || '0') || 0;
+              const off = transformOffset(t);
+              const globalY = localY + off.y;
+              // If this text is near the top of the content, we need more padding
+              if (globalY <= contentBounds.minY + 5) {
+                topPadding = 25;
+                break;
+              }
+            }
+          }
+        }
         // Only expand the viewBox — never shrink it (estimateSvgExtents may underestimate).
         minX = Math.min(minX, contentBounds.minX - sidePadding);
         minY = Math.min(minY, contentBounds.minY - topPadding);

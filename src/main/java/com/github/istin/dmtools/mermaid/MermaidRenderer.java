@@ -265,6 +265,12 @@ public class MermaidRenderer {
                 "(<text(?=[^>]*\\bclass=\"[^\"]*\\bjourney-section\\b)(?![^>]*\\btask\\b)[^>]*?)\\bstyle=\"",
                 "$1 style=\"fill:#333;");
 
+        // Batik does not support dominant-baseline="hanging" — it falls back to alphabetic,
+        // causing text to extend above its nominal y coordinate by ~0.8×font-size. Convert
+        // "hanging" elements to use an explicit dy offset so the text top aligns with y.
+        // Only non-rotated text is corrected; rotated axis labels are left as-is.
+        result = fixHangingDominantBaseline(result);
+
         // Batik does not reliably inherit font-weight from a parent <g style="font-weight:…">.
         // Class diagram nodes use <g style="font-weight: bolder" class="label"> around the
         // class-name text, expecting Batik to cascade bold to child tspans. Instead, propagate
@@ -328,6 +334,84 @@ public class MermaidRenderer {
         }
         gm.appendTail(sb);
         return sb.toString();
+    }
+
+    /**
+     * Fixes {@code dominant-baseline="hanging"} for Batik compatibility.
+     * <p>
+     * Batik does not support the "hanging" dominant-baseline value — it falls back to
+     * "alphabetic" rendering, placing the text baseline AT the element's y coordinate.
+     * With "hanging", the text should start (top of em-box) AT y, meaning the baseline
+     * should be at {@code y + cap-height ≈ y + 0.8 × font-size}. The difference causes
+     * titles and labels to render above their intended position.
+     * <p>
+     * Fix: for each non-rotated {@code <text>} with {@code dominant-baseline="hanging"},
+     * add {@code dy = 0.8 × font-size} so the baseline shifts down to the correct position,
+     * and change the baseline to "auto". Rotated text (e.g. axis labels with rotate(-90))
+     * is skipped since dy would apply in the wrong direction after rotation.
+     */
+    String fixHangingDominantBaseline(String svg) {
+        try {
+            javax.xml.parsers.DocumentBuilderFactory factory =
+                    javax.xml.parsers.DocumentBuilderFactory.newInstance();
+            factory.setNamespaceAware(true);
+            factory.setFeature("http://apache.org/xml/features/nonvalidating/load-external-dtd", false);
+            factory.setFeature("http://xml.org/sax/features/external-general-entities", false);
+            factory.setFeature("http://xml.org/sax/features/external-parameter-entities", false);
+            javax.xml.parsers.DocumentBuilder builder = factory.newDocumentBuilder();
+            org.w3c.dom.Document doc = builder.parse(
+                    new org.xml.sax.InputSource(new java.io.StringReader(svg)));
+
+            org.w3c.dom.NodeList textNodes = doc.getElementsByTagName("text");
+            boolean changed = false;
+
+            java.util.regex.Pattern nonZeroRotate =
+                    java.util.regex.Pattern.compile("rotate\\(\\s*(?!0(?:\\.0*)?\\s*[,)])");
+
+            for (int i = 0; i < textNodes.getLength(); i++) {
+                org.w3c.dom.Element el = (org.w3c.dom.Element) textNodes.item(i);
+                if (!"hanging".equals(el.getAttribute("dominant-baseline"))) continue;
+
+                // Skip rotated text — dy would shift in the wrong direction after rotation
+                String transform = el.getAttribute("transform");
+                if (nonZeroRotate.matcher(transform).find()) continue;
+
+                String fontSizeAttr = el.getAttribute("font-size");
+                if (fontSizeAttr.isEmpty()) fontSizeAttr = "16";
+                float fontSize;
+                try {
+                    fontSize = Float.parseFloat(fontSizeAttr);
+                } catch (NumberFormatException e) {
+                    continue;
+                }
+
+                // Shift text down by cap-height (≈ 0.8 × font-size) so that the top of the
+                // text aligns with the nominal y coordinate under Batik's alphabetic rendering.
+                float dyCorrection = Math.round(fontSize * 0.8f * 10) / 10f;
+                String existingDy = el.getAttribute("dy");
+                if (!existingDy.isEmpty()) {
+                    try {
+                        dyCorrection += Float.parseFloat(existingDy);
+                    } catch (NumberFormatException ignored) {}
+                }
+                el.setAttribute("dy", String.valueOf(dyCorrection));
+                el.setAttribute("dominant-baseline", "auto");
+                changed = true;
+            }
+
+            if (!changed) return svg;
+
+            javax.xml.transform.TransformerFactory tf =
+                    javax.xml.transform.TransformerFactory.newInstance();
+            javax.xml.transform.Transformer transformer = tf.newTransformer();
+            transformer.setOutputProperty(javax.xml.transform.OutputKeys.OMIT_XML_DECLARATION, "yes");
+            java.io.StringWriter sw = new java.io.StringWriter();
+            transformer.transform(new javax.xml.transform.dom.DOMSource(doc),
+                    new javax.xml.transform.stream.StreamResult(sw));
+            return sw.toString();
+        } catch (Exception e) {
+            return svg;
+        }
     }
 
     /**

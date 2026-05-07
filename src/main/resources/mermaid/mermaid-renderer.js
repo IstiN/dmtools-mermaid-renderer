@@ -231790,7 +231790,22 @@ A.method() {
             if (contentBounds) {
               const sidePadding = 10;
               const bottomPadding = 20;
-              const topPadding = 25;
+              let topPadding = 8;
+              if (svg2) {
+                const allTexts = svg2.querySelectorAll("text");
+                for (const t10 of allTexts) {
+                  const baseline = t10.getAttribute("dominant-baseline") || "auto";
+                  if (baseline === "middle" || baseline === "central") {
+                    const localY = parseFloat(t10.getAttribute("y") || "0") || 0;
+                    const off = transformOffset(t10);
+                    const globalY = localY + off.y;
+                    if (globalY <= contentBounds.minY + 5) {
+                      topPadding = 25;
+                      break;
+                    }
+                  }
+                }
+              }
               minX2 = Math.min(minX2, contentBounds.minX - sidePadding);
               minY2 = Math.min(minY2, contentBounds.minY - topPadding);
               maxX = Math.max(maxX, contentBounds.maxX + sidePadding);
