@@ -18,6 +18,19 @@ function visibleText(element) {
     .join(' ');
 }
 
+/**
+ * For multi-row text elements (those with tspan.row children — Mermaid flowchart
+ * nodes that contain <br/> line breaks), returns each row's text content separately.
+ * Returns null for single-line elements so callers fall through to visibleText().
+ */
+function visibleRowTexts(element) {
+  const tagName = String(element?.tagName || '').toLowerCase();
+  if (tagName !== 'text') return null;
+  const rows = element.querySelectorAll?.('tspan.row');
+  if (!rows || rows.length === 0) return null;
+  return Array.from(rows).map(r => (r.textContent || '').trim()).filter(Boolean);
+}
+
 function estimateTextWidth(element) {
   const tagName = String(element?.tagName || '').toLowerCase();
   if (tagName === 'style' || tagName === 'script') {
@@ -53,8 +66,13 @@ function estimateBox(element) {
   const text = visibleText(element);
   const lines = estimateLineCount(element, text);
   const fontSize = parseFontSize(element);
+  // For multi-row nodes, width = longest individual row (not full concatenated text).
+  const rowTexts = visibleRowTexts(element);
+  const maxText = rowTexts && rowTexts.length > 0
+    ? rowTexts.reduce((a, b) => (a.length >= b.length ? a : b), '')
+    : text;
   return {
-    width: Math.max(10, text.length * fontSize * 0.58),
+    width: Math.max(10, maxText.length * fontSize * 0.58),
     height: Math.max(fontSize * 1.45, lines * fontSize * 1.45),
   };
 }
@@ -437,10 +455,22 @@ function patchSvgMetrics(window, javaMetrics) {
 
   function realTextWidth(element) {
     if (!javaMetrics) return estimateTextWidth(element);
-    const text = visibleText(element);
-    if (!text) return 0;
     const fontSize = parseFontSize(element);
     const fontFamily = parseFontFamily(element);
+    // For multi-row text, return the width of the widest row (not full concatenated text).
+    const rowTexts = visibleRowTexts(element);
+    if (rowTexts && rowTexts.length > 0) {
+      try {
+        const rowWidths = rowTexts.map(rt =>
+          Number(javaMetrics.measureWidth(rt, fontSize, fontFamily)) || 0
+        );
+        return Math.max(...rowWidths) || estimateTextWidth(element);
+      } catch (_) {
+        return estimateTextWidth(element);
+      }
+    }
+    const text = visibleText(element);
+    if (!text) return 0;
     try {
       return Number(javaMetrics.measureWidth(text, fontSize, fontFamily)) || estimateTextWidth(element);
     } catch (_) {
@@ -470,7 +500,19 @@ function patchSvgMetrics(window, javaMetrics) {
     // Empty text → zero width (don't fall back to min-width estimate)
     if (!text) return { width: 0, height: Number(javaMetrics.measureHeight(fontSize, fontFamily)) || 16 };
     try {
-      const w = Number(javaMetrics.measureWidth(text, fontSize, fontFamily)) || estimateTextWidth(element);
+      // For multi-row nodes (tspan.row children), width = max individual-row width.
+      // Measuring the concatenated full text would return the width of one huge line
+      // and cause dagre to allocate a vastly over-wide box, distorting layout.
+      const rowTexts = visibleRowTexts(element);
+      let w;
+      if (rowTexts && rowTexts.length > 0) {
+        const rowWidths = rowTexts.map(rt =>
+          Number(javaMetrics.measureWidth(rt, fontSize, fontFamily)) || estimateTextWidth(element)
+        );
+        w = Math.max(...rowWidths);
+      } else {
+        w = Number(javaMetrics.measureWidth(text, fontSize, fontFamily)) || estimateTextWidth(element);
+      }
       const h = Number(javaMetrics.measureHeight(fontSize, fontFamily)) * Math.max(1, estimateLineCount(element, text));
       return { width: w, height: h };
     } catch (_) {

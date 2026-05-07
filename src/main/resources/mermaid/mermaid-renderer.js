@@ -231534,6 +231534,13 @@ A.method() {
         }
         return Array.from(element3?.children || []).map(visibleText).filter(Boolean).join(" ");
       }
+      function visibleRowTexts(element3) {
+        const tagName19 = String(element3?.tagName || "").toLowerCase();
+        if (tagName19 !== "text") return null;
+        const rows = element3.querySelectorAll?.("tspan.row");
+        if (!rows || rows.length === 0) return null;
+        return Array.from(rows).map((r10) => (r10.textContent || "").trim()).filter(Boolean);
+      }
       function estimateTextWidth(element3) {
         const tagName19 = String(element3?.tagName || "").toLowerCase();
         if (tagName19 === "style" || tagName19 === "script") {
@@ -231568,8 +231575,10 @@ A.method() {
         const text4 = visibleText(element3);
         const lines = estimateLineCount(element3, text4);
         const fontSize = parseFontSize2(element3);
+        const rowTexts = visibleRowTexts(element3);
+        const maxText = rowTexts && rowTexts.length > 0 ? rowTexts.reduce((a10, b10) => a10.length >= b10.length ? a10 : b10, "") : text4;
         return {
-          width: Math.max(10, text4.length * fontSize * 0.58),
+          width: Math.max(10, maxText.length * fontSize * 0.58),
           height: Math.max(fontSize * 1.45, lines * fontSize * 1.45)
         };
       }
@@ -231904,10 +231913,21 @@ A.method() {
         }
         function realTextWidth(element3) {
           if (!javaMetrics) return estimateTextWidth(element3);
-          const text4 = visibleText(element3);
-          if (!text4) return 0;
           const fontSize = parseFontSize2(element3);
           const fontFamily = parseFontFamily(element3);
+          const rowTexts = visibleRowTexts(element3);
+          if (rowTexts && rowTexts.length > 0) {
+            try {
+              const rowWidths = rowTexts.map(
+                (rt) => Number(javaMetrics.measureWidth(rt, fontSize, fontFamily)) || 0
+              );
+              return Math.max(...rowWidths) || estimateTextWidth(element3);
+            } catch (_6) {
+              return estimateTextWidth(element3);
+            }
+          }
+          const text4 = visibleText(element3);
+          if (!text4) return 0;
           try {
             return Number(javaMetrics.measureWidth(text4, fontSize, fontFamily)) || estimateTextWidth(element3);
           } catch (_6) {
@@ -231935,7 +231955,16 @@ A.method() {
           const fontFamily = parseFontFamily(element3);
           if (!text4) return { width: 0, height: Number(javaMetrics.measureHeight(fontSize, fontFamily)) || 16 };
           try {
-            const w11 = Number(javaMetrics.measureWidth(text4, fontSize, fontFamily)) || estimateTextWidth(element3);
+            const rowTexts = visibleRowTexts(element3);
+            let w11;
+            if (rowTexts && rowTexts.length > 0) {
+              const rowWidths = rowTexts.map(
+                (rt) => Number(javaMetrics.measureWidth(rt, fontSize, fontFamily)) || estimateTextWidth(element3)
+              );
+              w11 = Math.max(...rowWidths);
+            } else {
+              w11 = Number(javaMetrics.measureWidth(text4, fontSize, fontFamily)) || estimateTextWidth(element3);
+            }
             const h10 = Number(javaMetrics.measureHeight(fontSize, fontFamily)) * Math.max(1, estimateLineCount(element3, text4));
             return { width: w11, height: h10 };
           } catch (_6) {
