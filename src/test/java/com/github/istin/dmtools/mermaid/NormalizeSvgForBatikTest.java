@@ -94,6 +94,30 @@ class NormalizeSvgForBatikTest {
             String result = renderer.normalizeSvgForBatik(svg);
             assertTrue(result.contains("fill=\"#333\""), "non-empty fill should be preserved");
         }
+
+        @Test
+        void removesEmptyFontWeightAttribute() {
+            // Class diagram tspans have font-weight="" which blocks bold inheritance from
+            // the parent <g style="font-weight: bolder">. Removing it restores bold rendering.
+            String svg = svgWrap(
+                    "<g style=\"font-weight: bolder\" class=\"label\">"
+                    + "<tspan font-weight=\"\">MermaidRenderer</tspan>"
+                    + "</g>");
+            String result = renderer.normalizeSvgForBatik(svg);
+            assertFalse(result.contains("font-weight=\"\""),
+                    "empty font-weight=\"\" should be removed");
+            // After removal, propagateBolderFontWeight should inject font-weight="bold"
+            assertTrue(result.contains("font-weight=\"bold\""),
+                    "tspan inside font-weight:bolder group should get font-weight=bold");
+        }
+
+        @Test
+        void preservesNonEmptyFontWeightAttribute() {
+            String svg = svgWrap("<tspan font-weight=\"bold\">Header</tspan>");
+            String result = renderer.normalizeSvgForBatik(svg);
+            assertTrue(result.contains("font-weight=\"bold\""),
+                    "non-empty font-weight should be preserved");
+        }
     }
 
     // ── orient="auto-start-reverse" fix ───────────────────────────────────

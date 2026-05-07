@@ -228,6 +228,11 @@ public class MermaidRenderer {
                 // Mermaid sometimes generates fill="" (empty fill attribute) which makes
                 // text invisible. Remove empty fill attributes so CSS can take effect.
                 .replaceAll("\\bfill=\"\"", "")
+                // Mermaid generates font-weight="" (empty) on class diagram tspans, which
+                // blocks inheritance of font-weight: bolder from the parent <g style="...">.
+                // Batik treats the empty attribute as present (hasAttribute=true) and stops
+                // CSS/style inheritance. Remove it so bold class names render correctly.
+                .replaceAll("\\bfont-weight=\"\"", "")
                 .replace("orient=\"auto-start-reverse\"", "orient=\"auto\"")
                 .replace("alignment-baseline=\"central\"", "alignment-baseline=\"middle\"")
                 .replaceAll("<rect([^>]*?)(?<!/) />", "<rect$1></rect>")
@@ -260,6 +265,12 @@ public class MermaidRenderer {
                 "(<text(?=[^>]*\\bclass=\"[^\"]*\\bjourney-section\\b)(?![^>]*\\btask\\b)[^>]*?)\\bstyle=\"",
                 "$1 style=\"fill:#333;");
 
+        // Batik does not reliably inherit font-weight from a parent <g style="font-weight:…">.
+        // Class diagram nodes use <g style="font-weight: bolder" class="label"> around the
+        // class-name text, expecting Batik to cascade bold to child tspans. Instead, propagate
+        // font-weight="bolder" directly onto every tspan inside such groups.
+        result = propagateBolderFontWeight(result);
+
         // Batik CSS cascade is unreliable for duplicate selectors with conflicting properties.
         // Force correct fill/stroke on <path> and <circle> elements inside <marker> by injecting
         // presentation attributes. This fixes ER relationship line markers (crow's foot symbols).
@@ -277,6 +288,46 @@ public class MermaidRenderer {
                 "<rect(?=[^>]*\\bclass=\"[^\"]*\\bbackground\\b)(?![^>]*\\bfill=)([^>]*?)(/?>)",
                 "<rect fill=\"none\"$1$2");
         return result;
+    }
+
+    /**
+     * Propagates {@code font-weight="bold"} directly onto {@code <text>} and {@code <tspan>}
+     * elements inside {@code <g style="font-weight: bolder" …>} groups. Batik does not reliably
+     * cascade font-weight from a group's {@code style} attribute to descendant text elements, and
+     * the relative keyword "bolder" may not resolve correctly without an explicit inherited base.
+     * Using the absolute keyword "bold" and injecting it on both text and tspan elements ensures
+     * Batik picks the correct bold font face.
+     */
+    String propagateBolderFontWeight(String svg) {
+        Pattern groupPattern = Pattern.compile(
+                "(?s)(<g\\b(?=[^>]*\\bstyle=\"[^\"]*font-weight:\\s*bolder[^\"]*\")[^>]*>)(.*?)(</g>)");
+        Matcher gm = groupPattern.matcher(svg);
+        StringBuffer sb = new StringBuffer();
+        while (gm.find()) {
+            String open = gm.group(1);
+            String inner = gm.group(2);
+            String close = gm.group(3);
+            // Inject font-weight:bold into the style attribute (or add one) on <text>/<tspan>
+            // that don't already have font-weight in their style.
+            // Also set font-weight="bold" presentation attribute for Batik compatibility.
+            Pattern elemPattern = Pattern.compile(
+                    "(<(?:text|tspan)(?![^>]*\\bfont-weight=)([^>]*))(>)");
+            String patched = elemPattern.matcher(inner).replaceAll(mr -> {
+                String elemStart = mr.group(1);
+                String closing = mr.group(3);
+                // Check if there's an existing style attribute to merge into.
+                if (elemStart.contains("style=\"")) {
+                    // Prepend font-weight:bold to existing style value.
+                    elemStart = elemStart.replaceFirst(
+                            "style=\"", "style=\"font-weight:bold;");
+                }
+                // Also set as presentation attribute.
+                return elemStart + " font-weight=\"bold\"" + closing;
+            });
+            gm.appendReplacement(sb, Matcher.quoteReplacement(open + patched + close));
+        }
+        gm.appendTail(sb);
+        return sb.toString();
     }
 
     /**
