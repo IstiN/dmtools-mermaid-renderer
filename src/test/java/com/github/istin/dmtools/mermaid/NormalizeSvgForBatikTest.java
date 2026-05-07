@@ -604,6 +604,18 @@ class NormalizeSvgForBatikTest {
         }
 
         @Test
+        void textAnchorIsInlinedForNestedFlowchartLabels() {
+            String css = "#dmtools-mermaid .node .label text{text-anchor:middle;}";
+            String svg = svgWrap(css,
+                    "<g class=\"node\"><g class=\"label\"><text><tspan x=\"0\">Centered</tspan></text></g></g>");
+
+            String result = renderer.normalizeSvgForBatik(svg);
+
+            assertTrue(result.contains("text-anchor=\"middle\""),
+                    "text-anchor must be inlined because Affinity ignores Mermaid's nested CSS selector");
+        }
+
+        @Test
         void hslColorsInCssAreConvertedBeforeInlining() {
             String css = ".commit0{fill:hsl(240, 100%, 50%);stroke:hsl(240, 100%, 50%);}";
             String svg = svgWrap(css, "<circle class=\"commit0\" r=\"5\"></circle>");
@@ -830,6 +842,65 @@ class NormalizeSvgForBatikTest {
             String result = renderer.wrapSvgSwitchTexts(svg);
             // No change expected (no switch elements)
             assertTrue(result.contains("Hello"), "Content should be preserved");
+        }
+    }
+
+    @Nested
+    class EmojiFontSpans {
+        @Test
+        void wrapsEmojiRunsWithNotoEmojiFont() {
+            String svg = svgWrap("<text><tspan>Done ✅ and robot 🤖</tspan></text>");
+
+            String result = renderer.normalizeSvgForBatik(svg);
+
+            assertFalse(result.contains("@font-face{font-family:'Noto Emoji'"),
+                    "SVG should not embed a large data-font because Affinity rejects it");
+            assertTrue(result.contains("font-family=\"Noto Emoji, Apple Color Emoji, Segoe UI Emoji, sans-serif\""),
+                    "emoji runs should use an explicit emoji font because Batik lacks browser-style fallback");
+            assertTrue(result.contains("style=\"fill:#111111;\""),
+                    "emoji runs should force a readable dark fill instead of inheriting background-like theme colors");
+            assertTrue(result.contains("Done"),
+                    "non-emoji text should remain in the primary font");
+            assertFalse(result.contains("<tspan>Done ✅ and robot 🤖</tspan>"),
+                    "mixed text should be split so only emoji use Noto Emoji");
+        }
+
+        @Test
+        void leavesPlainTextWithoutEmbeddedEmojiFont() {
+            String svg = svgWrap("<text><tspan>Done without emoji</tspan></text>");
+
+            String result = renderer.normalizeSvgForBatik(svg);
+
+            assertFalse(result.contains("font-family=\"Noto Emoji\""),
+                    "plain text should not be rewritten");
+        }
+    }
+
+    @Nested
+    class AffinityTextPositioning {
+        @Test
+        void removesParentTextYWhenRowsHaveExplicitY() {
+            String svg = svgWrap("<text y=\"-10.1\">"
+                    + "<tspan class=\"text-outer-tspan row\" x=\"0\" y=\"-0.1em\" dy=\"1.1em\">SM adds</tspan>"
+                    + "<tspan class=\"text-outer-tspan row\" x=\"0\" y=\"1em\" dy=\"1.1em\">BEFORE dispatch</tspan>"
+                    + "</text>");
+
+            String result = renderer.normalizeSvgForBatik(svg);
+
+            assertFalse(result.contains("<text y=\"-10.1\""),
+                    "parent text y should be removed so Affinity does not apply it on top of row y");
+            assertTrue(result.contains("y=\"-0.1em\""),
+                    "row tspan y should remain as the source of truth");
+        }
+
+        @Test
+        void keepsTextYWhenRowsAreNotExplicitlyPositioned() {
+            String svg = svgWrap("<text y=\"20\"><tspan>Plain label</tspan></text>");
+
+            String result = renderer.normalizeSvgForBatik(svg);
+
+            assertTrue(result.contains("<text y=\"20\""),
+                    "single-line/plain text still needs its parent y");
         }
     }
 }

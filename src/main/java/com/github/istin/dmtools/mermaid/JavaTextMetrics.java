@@ -27,6 +27,7 @@ final class JavaTextMetrics {
         loadBundledFont("/fonts/TrebuchetMS-Bold.ttf");
         loadBundledFont("/fonts/NotoSans-Regular.ttf");
         loadBundledFont("/fonts/NotoSans-Bold.ttf");
+        loadBundledFont("/fonts/NotoEmoji-Regular.ttf");
         fontsLoaded = true;
     }
 

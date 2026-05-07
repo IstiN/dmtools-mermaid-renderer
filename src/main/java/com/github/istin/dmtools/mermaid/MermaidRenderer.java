@@ -151,13 +151,13 @@ public class MermaidRenderer {
 
     public Path renderToSvgFile(String definition, Path outputPath) throws IOException {
         Path targetPath = resolveOutputPath(outputPath, ".svg");
-        Files.writeString(targetPath, renderToSvg(definition), StandardCharsets.UTF_8);
+        Files.writeString(targetPath, normalizeSvgForBatik(renderToSvg(definition)), StandardCharsets.UTF_8);
         return assertWritten(targetPath, "SVG");
     }
 
     Path renderToSvgFileUnchecked(String definition, Path outputPath) throws IOException {
         Path targetPath = resolveOutputPath(outputPath, ".svg");
-        Files.writeString(targetPath, renderToSvgUnchecked(definition), StandardCharsets.UTF_8);
+        Files.writeString(targetPath, normalizeSvgForBatik(renderToSvgUnchecked(definition)), StandardCharsets.UTF_8);
         return assertWritten(targetPath, "SVG");
     }
 
@@ -238,6 +238,8 @@ public class MermaidRenderer {
                 // Batik treats the empty attribute as present (hasAttribute=true) and stops
                 // CSS/style inheritance. Remove it so bold class names render correctly.
                 .replaceAll("\\bfont-weight=\"\"", "")
+        // NotoEmoji-Regular is registered with AWT in JavaTextMetrics and Batik will
+                // automatically fall back to it for emoji codepoints missing from the primary font.
                 .replace("orient=\"auto-start-reverse\"", "orient=\"auto\"")
                 .replace("alignment-baseline=\"central\"", "alignment-baseline=\"middle\"")
                 .replaceAll("<rect([^>]*?)(?<!/) />", "<rect$1></rect>")
@@ -293,12 +295,202 @@ public class MermaidRenderer {
         // `#id .classA.classB`. Inline fill/stroke from CSS rules as presentation attributes
         // using DOM-based ancestor class checking for correct specificity.
         result = inlineCssFillStroke(result);
+        result = removeRedundantTextYForPositionedRows(result);
+        result = applyEmojiFontSpans(result);
         // After CSS inlining, any <rect class="background"> that STILL has no fill
         // would default to black in Batik. Set fill="none" as a safe fallback.
         result = result.replaceAll(
                 "<rect(?=[^>]*\\bclass=\"[^\"]*\\bbackground\\b)(?![^>]*\\bfill=)([^>]*?)(/?>)",
                 "<rect fill=\"none\"$1$2");
         return result;
+    }
+
+    /**
+     * Mermaid flowchart labels often emit {@code <text y="..."><tspan class="row" y="..." dy="...">}.
+     * Browsers and Batik position the rows from the row tspans, but vector editors such as Affinity
+     * may also apply the parent text y, shifting multi-line labels inside their node boxes. Removing
+     * the redundant parent y keeps the row coordinates as the single source of truth.
+     */
+    String removeRedundantTextYForPositionedRows(String svg) {
+        if (!svg.contains("text-outer-tspan row")) {
+            return svg;
+        }
+        try {
+            javax.xml.parsers.DocumentBuilderFactory factory =
+                    javax.xml.parsers.DocumentBuilderFactory.newInstance();
+            factory.setNamespaceAware(true);
+            factory.setFeature("http://apache.org/xml/features/nonvalidating/load-external-dtd", false);
+            factory.setFeature("http://xml.org/sax/features/external-general-entities", false);
+            javax.xml.parsers.DocumentBuilder builder = factory.newDocumentBuilder();
+            org.w3c.dom.Document doc = builder.parse(
+                    new ByteArrayInputStream(svg.getBytes(StandardCharsets.UTF_8)));
+
+            org.w3c.dom.NodeList texts = doc.getElementsByTagNameNS("*", "text");
+            for (int i = 0; i < texts.getLength(); i++) {
+                org.w3c.dom.Element text = (org.w3c.dom.Element) texts.item(i);
+                if (hasPositionedRowTspan(text)) {
+                    text.removeAttribute("y");
+                }
+            }
+
+            javax.xml.transform.TransformerFactory tf = javax.xml.transform.TransformerFactory.newInstance();
+            javax.xml.transform.Transformer transformer = tf.newTransformer();
+            transformer.setOutputProperty(javax.xml.transform.OutputKeys.OMIT_XML_DECLARATION, "yes");
+            java.io.StringWriter sw = new java.io.StringWriter();
+            transformer.transform(
+                    new javax.xml.transform.dom.DOMSource(doc),
+                    new javax.xml.transform.stream.StreamResult(sw));
+            return sw.toString();
+        } catch (Exception e) {
+            return svg;
+        }
+    }
+
+    private boolean hasPositionedRowTspan(org.w3c.dom.Element text) {
+        org.w3c.dom.NodeList children = text.getChildNodes();
+        for (int i = 0; i < children.getLength(); i++) {
+            org.w3c.dom.Node child = children.item(i);
+            if (child instanceof org.w3c.dom.Element element) {
+                String localName = element.getLocalName();
+                if (localName == null) {
+                    localName = element.getTagName();
+                }
+                String classAttr = element.getAttribute("class");
+                if ("tspan".equals(localName)
+                        && classAttr != null
+                        && classAttr.contains("text-outer-tspan")
+                        && classAttr.contains("row")
+                        && element.hasAttribute("y")) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Applies Noto Emoji only to the emoji runs inside SVG text nodes. Java2D/Batik do not
+     * reliably perform browser-style font fallback for mixed text, so a label such as
+     * {@code "Done ✅"} needs the emoji codepoint in its own tspan with an explicit font face.
+     */
+    String applyEmojiFontSpans(String svg) {
+        if (!containsEmoji(svg)) {
+            return svg;
+        }
+        try {
+            javax.xml.parsers.DocumentBuilderFactory factory =
+                    javax.xml.parsers.DocumentBuilderFactory.newInstance();
+            factory.setNamespaceAware(true);
+            factory.setFeature("http://apache.org/xml/features/nonvalidating/load-external-dtd", false);
+            factory.setFeature("http://xml.org/sax/features/external-general-entities", false);
+            javax.xml.parsers.DocumentBuilder builder = factory.newDocumentBuilder();
+            org.w3c.dom.Document doc = builder.parse(
+                    new ByteArrayInputStream(svg.getBytes(StandardCharsets.UTF_8)));
+
+            applyEmojiFontSpans(doc, doc.getDocumentElement());
+
+            javax.xml.transform.TransformerFactory tf = javax.xml.transform.TransformerFactory.newInstance();
+            javax.xml.transform.Transformer transformer = tf.newTransformer();
+            transformer.setOutputProperty(javax.xml.transform.OutputKeys.OMIT_XML_DECLARATION, "yes");
+            java.io.StringWriter sw = new java.io.StringWriter();
+            transformer.transform(
+                    new javax.xml.transform.dom.DOMSource(doc),
+                    new javax.xml.transform.stream.StreamResult(sw));
+            return sw.toString();
+        } catch (Exception e) {
+            return svg;
+        }
+    }
+
+    private void applyEmojiFontSpans(org.w3c.dom.Document doc, org.w3c.dom.Node node) {
+        List<org.w3c.dom.Node> children = new ArrayList<>();
+        org.w3c.dom.NodeList childNodes = node.getChildNodes();
+        for (int i = 0; i < childNodes.getLength(); i++) {
+            children.add(childNodes.item(i));
+        }
+
+        for (org.w3c.dom.Node child : children) {
+            if (child.getNodeType() == org.w3c.dom.Node.TEXT_NODE
+                    && isTextContainer(child.getParentNode())
+                    && containsEmoji(child.getTextContent())) {
+                replaceTextNodeWithEmojiSpans(doc, child);
+            } else if (child.getNodeType() == org.w3c.dom.Node.ELEMENT_NODE) {
+                applyEmojiFontSpans(doc, child);
+            }
+        }
+    }
+
+    private boolean isTextContainer(org.w3c.dom.Node node) {
+        if (!(node instanceof org.w3c.dom.Element element)) {
+            return false;
+        }
+        String localName = element.getLocalName();
+        if (localName == null) {
+            localName = element.getTagName();
+        }
+        return "text".equals(localName) || "tspan".equals(localName);
+    }
+
+    private void replaceTextNodeWithEmojiSpans(org.w3c.dom.Document doc, org.w3c.dom.Node textNode) {
+        org.w3c.dom.Node parent = textNode.getParentNode();
+        for (EmojiTextRun run : splitEmojiRuns(textNode.getTextContent())) {
+            org.w3c.dom.Element tspan = doc.createElementNS("http://www.w3.org/2000/svg", "tspan");
+            if (run.emoji()) {
+                tspan.setAttribute("font-family", "Noto Emoji, Apple Color Emoji, Segoe UI Emoji, sans-serif");
+                tspan.setAttribute("fill", "#111111");
+                tspan.setAttribute("style", "fill:#111111;");
+            }
+            tspan.appendChild(doc.createTextNode(run.text()));
+            parent.insertBefore(tspan, textNode);
+        }
+        parent.removeChild(textNode);
+    }
+
+    private boolean containsEmoji(String text) {
+        return text != null && text.codePoints().anyMatch(this::isEmojiCodePoint);
+    }
+
+    private List<EmojiTextRun> splitEmojiRuns(String text) {
+        List<EmojiTextRun> runs = new ArrayList<>();
+        StringBuilder current = new StringBuilder();
+        Boolean currentEmoji = null;
+        boolean joinNextAsEmoji = false;
+        for (int i = 0; i < text.length(); ) {
+            int cp = text.codePointAt(i);
+            String chars = new String(Character.toChars(cp));
+            boolean emoji = isEmojiCodePoint(cp)
+                    || isEmojiModifier(cp)
+                    || cp == 0xFE0E
+                    || cp == 0xFE0F
+                    || cp == 0x200D
+                    || joinNextAsEmoji;
+            if (currentEmoji != null && currentEmoji != emoji) {
+                runs.add(new EmojiTextRun(current.toString(), currentEmoji));
+                current.setLength(0);
+            }
+            current.append(chars);
+            currentEmoji = emoji;
+            joinNextAsEmoji = cp == 0x200D;
+            i += Character.charCount(cp);
+        }
+        if (!current.isEmpty()) {
+            runs.add(new EmojiTextRun(current.toString(), currentEmoji != null && currentEmoji));
+        }
+        return runs;
+    }
+
+    private boolean isEmojiCodePoint(int cp) {
+        return (cp >= 0x1F000 && cp <= 0x1FAFF)
+                || (cp >= 0x2600 && cp <= 0x27BF)
+                || (cp >= 0x2300 && cp <= 0x23FF);
+    }
+
+    private boolean isEmojiModifier(int cp) {
+        return (cp >= 0x1F3FB && cp <= 0x1F3FF)
+                || (cp >= 0xE0020 && cp <= 0xE007F);
+    }
+
+    private record EmojiTextRun(String text, boolean emoji) {
     }
 
     /**
@@ -616,7 +808,8 @@ public class MermaidRenderer {
         }
         String css = styleMatcher.group(1);
 
-        // Parse CSS rules: extract selector, fill, stroke
+        // Parse CSS rules: extract selector and presentation properties that common SVG
+        // consumers (Batik, Affinity) do not reliably apply from complex CSS selectors.
         List<CssRule> rules = new ArrayList<>();
         Pattern rulePattern = Pattern.compile("([^{}]+)\\{([^}]+)\\}");
         Matcher ruleMatcher = rulePattern.matcher(css);
@@ -628,12 +821,16 @@ public class MermaidRenderer {
             String stroke = extractCssProp(body, "stroke");
             String strokeDasharray = extractCssProp(body, "stroke-dasharray");
             String strokeWidth = extractCssProp(body, "stroke-width");
-            if (fill == null && stroke == null && strokeDasharray == null && strokeWidth == null) continue;
+            String textAnchor = extractCssProp(body, "text-anchor");
+            if (fill == null && stroke == null && strokeDasharray == null
+                    && strokeWidth == null && textAnchor == null) {
+                continue;
+            }
 
             for (String sel : selectorGroup.split(",")) {
                 sel = sel.trim();
                 if (sel.isEmpty()) continue;
-                CssRule rule = parseCssSelector(sel, fill, stroke, strokeDasharray, strokeWidth);
+                CssRule rule = parseCssSelector(sel, fill, stroke, strokeDasharray, strokeWidth, textAnchor);
                 if (rule != null) {
                     rules.add(rule);
                 }
@@ -698,17 +895,19 @@ public class MermaidRenderer {
             parent = parent.getParentNode();
         }
 
-        // Find best matching fill/stroke (last matching rule wins = CSS cascade order)
+        // Find best matching properties (last matching rule wins = CSS cascade order)
         String bestFill = null;
         String bestStroke = null;
         String bestStrokeDasharray = null;
         String bestStrokeWidth = null;
+        String bestTextAnchor = null;
         for (CssRule rule : rules) {
             if (rule.matches(tagName, classes, ancestorClasses)) {
                 if (rule.fill != null) bestFill = rule.fill;
                 if (rule.stroke != null) bestStroke = rule.stroke;
                 if (rule.strokeDasharray != null) bestStrokeDasharray = rule.strokeDasharray;
                 if (rule.strokeWidth != null) bestStrokeWidth = rule.strokeWidth;
+                if (rule.textAnchor != null) bestTextAnchor = rule.textAnchor;
             }
         }
 
@@ -724,6 +923,9 @@ public class MermaidRenderer {
         }
         if (bestStrokeWidth != null && !element.hasAttribute("stroke-width")) {
             element.setAttribute("stroke-width", bestStrokeWidth);
+        }
+        if (bestTextAnchor != null && !element.hasAttribute("text-anchor")) {
+            element.setAttribute("text-anchor", bestTextAnchor);
         }
 
         // Recurse into children
@@ -754,7 +956,7 @@ public class MermaidRenderer {
      * - targetElement: the element type (rect, path, etc.) or null for class-only selectors
      */
     private CssRule parseCssSelector(String selector, String fill, String stroke,
-                                     String strokeDasharray, String strokeWidth) {
+                                     String strokeDasharray, String strokeWidth, String textAnchor) {
         // Strip leading #id part (e.g., "#dmtools-mermaid ")
         String sel = selector.replaceFirst("^#[\\w-]+\\s+", "");
         if (sel.startsWith("#")) return null; // pure id selector for a different element
@@ -798,7 +1000,7 @@ public class MermaidRenderer {
         }
 
         return new CssRule(targetElement, requiredClasses, ancestorClasses, fill, stroke,
-                strokeDasharray, strokeWidth);
+                strokeDasharray, strokeWidth, textAnchor);
     }
 
     static class CssRule {
@@ -809,9 +1011,10 @@ public class MermaidRenderer {
         final String stroke;
         final String strokeDasharray;
         final String strokeWidth;
+        final String textAnchor;
 
         CssRule(String targetElement, List<String> requiredClasses, List<String> ancestorClasses,
-                String fill, String stroke, String strokeDasharray, String strokeWidth) {
+                String fill, String stroke, String strokeDasharray, String strokeWidth, String textAnchor) {
             this.targetElement = targetElement;
             this.requiredClasses = requiredClasses;
             this.ancestorClasses = ancestorClasses;
@@ -819,6 +1022,7 @@ public class MermaidRenderer {
             this.stroke = stroke;
             this.strokeDasharray = strokeDasharray;
             this.strokeWidth = strokeWidth;
+            this.textAnchor = textAnchor;
         }
 
         boolean matches(String elemTag, List<String> elemClasses, Set<String> elemAncestorClasses) {
